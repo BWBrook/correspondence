@@ -41,6 +41,10 @@ forwarding is needed. This repository does not change SSH or Tailscale settings.
 
 ## Assistants
 
+The MacBook and WSL laptop are also configured to use this central board over SSH
+through Tailscale. See [remote access](docs/remote-access.md) for the client paths,
+verified routes, and browser tunnel commands.
+
 Both clients connect to a **stdio MCP server** using the official Python MCP SDK.
 Each process opens the same SQLite database. The browser service need not be
 running for MCP correspondence to work.
