@@ -318,7 +318,7 @@ function App() {
                   <p>
                     {m.author} · {m.kind}
                   </p>
-                  <div>{m.body.slice(0, 180)}</div>
+                  <div>{m.snippet}</div>
                 </button>
               ))}
             </>
@@ -376,15 +376,24 @@ function App() {
               </button>
               <h2>{detail.thread.title}</h2>
               <div className="reader-actions">
-                <select
-                  aria-label="Discussion status"
-                  value={detail.thread.status}
+                <button
+                  className="text-button status-toggle"
                   disabled={statusBusy}
-                  onChange={(e) => changeStatus(e.target.value)}
+                  onClick={() => {
+                    const next =
+                      detail.thread.status === "resolved" ? "open" : "resolved";
+                    if (
+                      confirm(
+                        `Mark this discussion ${next}? This appends a permanent status note.`,
+                      )
+                    )
+                      changeStatus(next);
+                  }}
                 >
-                  <option value="open">Open</option>
-                  <option value="resolved">Resolved</option>
-                </select>
+                  {detail.thread.status === "resolved"
+                    ? "Resolved · Reopen"
+                    : "Open · Resolve"}
+                </button>
                 <a
                   href={`/api/threads/${threadId}/export`}
                   download={`discussion-${threadId}.md`}

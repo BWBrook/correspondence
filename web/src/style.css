@@ -356,10 +356,9 @@ label > span {
   font-size: 13px;
   flex-shrink: 0;
 }
-.reader-actions select {
-  border: 0;
+.reader-actions .status-toggle {
   padding: 7px 3px;
-  max-width: 95px;
+  white-space: nowrap;
 }
 .reader-actions a {
   display: flex;

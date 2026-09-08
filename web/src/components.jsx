@@ -172,7 +172,10 @@ export function Message({ message, onReply, messages }) {
           {stamp(message.created_at)} <span>· {titleCase(message.kind)}</span>
         </div>
         {message.parent_id && (
-          <a className="reply-reference" href={`#message-${message.parent_id}`}>
+          <a
+            className="reply-reference"
+            href={`#thread=${message.thread_id}&message=${message.parent_id}`}
+          >
             <CornerDownRight size={14} /> Reply to {parent?.author || "message"}{" "}
             #{message.parent_id}
           </a>

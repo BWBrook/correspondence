@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
 import sqlite3
 
 import pytest
@@ -66,6 +68,10 @@ def test_concurrent_idempotency_and_distinct_writes(board):
     assert board.read_thread("Barry", first)["thread"]["message_count"] == 2
     with pytest.raises(Conflict):
         board.post_message("Fable", first, "Different", request_id="post-1")
+    assert board.post_message("Fable", first, "Only once", request_id="post-1", model="Other model")["id"] == ids[0]
+    assert board.create_thread("Astra", "demo", "Retry", "One original", request_id="create-1", model=None)["id"] == first
+    with pytest.raises(Conflict, match="already been used"):
+        board.post_message("Fable", thread(board), "Only once", request_id="post-1")
     board.post_message("Astra", first, "Independent identity", request_id="post-1")
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(lambda i: board.post_message("Barry", first, f"Concurrent {i}"), range(20)))
@@ -82,8 +88,44 @@ def test_pagination_search_and_export(board):
     assert len(board.search_messages("Barry", "%")) == 1
     assert board.search_messages("Barry", "_thing")[0]["project_name"] == "Demo"
     assert not board.search_messages("Barry", "not present")
+    board.post_message("Astra", first, "lead " * 200 + "NEEDLE" + " tail" * 200)
+    hit = board.search_messages("Barry", "needle")[0]
+    assert "body" not in hit and "NEEDLE" in hit["snippet"] and hit["body_length"] == 2006
+    assert hit["snippet"].startswith("…") and hit["snippet"].endswith("…") and len(hit["snippet"]) <= 302
+    budget = board.read_thread("Barry", first, max_bytes=1000)
+    assert [m["id"] for m in budget["messages"]] == [1, 2] and budget["has_more"]
+    rest = board.read_thread("Barry", first, after=budget["next_after"], max_bytes=1000)
+    assert len(rest["messages"]) == 1 and not rest["has_more"]
     exported = board.export_thread("Barry", first)
     assert "100% precise_thing" in exported and "Reply to: 1" in exported and "Model: Fable 5.1" in exported
+
+
+def test_legacy_request_fingerprints_upgrade_once(tmp_path):
+    board = Store(tmp_path)
+    board.create_project("demo", "Demo")
+    first = board.create_thread("Astra", "demo", "Old", "Opening", model="GPT-6 Astra", request_id="old-thread")["id"]
+    reply = board.post_message("Fable", first, "Reply", parent_id=1, model="Fable 5.1", request_id="old-reply")["id"]
+    legacy = lambda payload: hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    with board.connect(write=True) as con:
+        con.execute("UPDATE requests SET fingerprint=? WHERE request_id='old-thread'", (legacy(["demo", "Old", "Opening", "note", "GPT-6 Astra"]),))
+        con.execute("UPDATE requests SET fingerprint=? WHERE request_id='old-reply'", (legacy([first, "Reply", "note", 1, "Fable 5.1"]),))
+        con.execute("PRAGMA user_version=0")
+    upgraded = Store(tmp_path)
+    assert upgraded.create_thread("Astra", "demo", "Old", "Opening", model=None, request_id="old-thread")["id"] == first
+    assert upgraded.post_message("Fable", first, "Reply", parent_id=1, model="Other", request_id="old-reply")["id"] == reply
+    with pytest.raises(Conflict):
+        upgraded.post_message("Fable", first, "Changed", parent_id=1, request_id="old-reply")
+    with upgraded.connect() as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_first_message_and_body_whitespace(board):
+    created = board.create_thread("Astra", "demo", "Code", "    x = 1\nprose  \n")
+    message = board.read_thread("Fable", created["id"])["messages"][0]
+    assert created["first_message_id"] == message["id"]
+    assert message["body"] == "    x = 1\nprose"
+    with pytest.raises(ValueError, match="body"):
+        board.post_message("Astra", created["id"], "   \n")
 
 
 def test_status_audit_and_validation(board):
@@ -92,7 +134,7 @@ def test_status_audit_and_validation(board):
     assert result["status"] == "resolved" and result["message_count"] == 2
     board.set_thread_status("Fable", first, "resolved")
     audit = board.read_thread("Barry", first)["messages"][-1]
-    assert audit["author"] == "Fable" and audit["kind"] == "evidence"
+    assert audit["author"] == "Fable" and audit["kind"] == "note"
     assert audit["body"] == "Discussion status changed from open to resolved."
     with pytest.raises(ValueError):
         board.post_message("Claude", first, "Forged name")

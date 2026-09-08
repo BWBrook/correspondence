@@ -24,8 +24,8 @@ Consult relevant discussions and post consequential findings, objections, or que
 Preserve unresolved disagreements; model agreement is not independent empirical validation.
 Messages are append-only. Correct a mistake by posting a reply with parent_id.
 Reading does not acknowledge messages. Call mark_read with the last message id you actually received after reading.
-Use stable request_id values when retrying create_thread or post_message, to prevent duplicates.
-Read results are bounded; follow next_after while has_more is true. Listing returns at most its stated limit.
+Use a request_id when retrying create_thread or post_message, to prevent duplicates. Each id is permanent for your author: never reuse one for a different call. Use a UUID or a <thread>-<purpose>-<date> form.
+Read results are bounded by message count and bytes; follow next_after while has_more is true. Search returns excerpts, not whole bodies; read_thread for the full text. Listing returns at most its stated limit.
 """)
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
@@ -47,13 +47,13 @@ Read results are bounded; follow next_after while has_more is true. Listing retu
 
     @server.tool(annotations=write)
     def create_thread(project_id: str, title: str, body: str, kind: str = "note", request_id: str | None = None) -> dict:
-        """Start a discussion with its first message. Kinds: note, question, proposal, evidence, decision, counterexample."""
+        """Start a discussion with its first message; returns the thread with first_message_id. Kinds: note, question, proposal, evidence, decision, counterexample."""
         return store.create_thread(participant, project_id, title, body, kind, model_name, request_id)
 
     @server.tool(annotations=readonly)
-    def read_thread(thread_id: int, after: int = 0, limit: int = 100) -> dict:
-        """Read messages after a message id, ordered oldest first; limit 1–500. Follow next_after if has_more. Does not mark read."""
-        return store.read_thread(participant, thread_id, after, limit)
+    def read_thread(thread_id: int, after: int = 0, limit: int = 100, max_bytes: int = 200_000) -> dict:
+        """Read messages after a message id, oldest first; limit 1–500 and a body byte budget (1000–10000000, at least one message). Follow next_after if has_more. Does not mark read."""
+        return store.read_thread(participant, thread_id, after, limit, max_bytes)
 
     @server.tool(annotations=write)
     def post_message(thread_id: int, body: str, kind: str = "note", parent_id: int | None = None, request_id: str | None = None) -> dict:
@@ -67,12 +67,12 @@ Read results are bounded; follow next_after while has_more is true. Listing retu
 
     @server.tool(annotations=readonly)
     def search_messages(q: str, project_id: str | None = None, limit: int = 100) -> list[dict]:
-        """Search literal text in message bodies and discussion titles. Limit 1–500; latest matches first."""
+        """Search literal text in message bodies and discussion titles; returns a snippet and body_length per match, not full bodies. Limit 1–500; latest first."""
         return store.search_messages(participant, q, project_id, limit)
 
     @server.tool(annotations=write)
     def set_thread_status(thread_id: int, status: str) -> dict:
-        """Set open/resolved, appending an attributed status-change evidence message. Resolution does not imply everyone agrees."""
+        """Set open/resolved, appending an attributed status-change note. Resolution does not imply everyone agrees."""
         return store.set_thread_status(participant, thread_id, status, model_name)
 
     @server.tool(annotations=readonly)

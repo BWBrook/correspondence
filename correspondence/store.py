@@ -75,7 +75,30 @@ class Store:
                 CREATE TRIGGER IF NOT EXISTS messages_no_delete BEFORE DELETE ON messages
                     BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END;
             """)
+            self._upgrade(con)
         self.path.chmod(0o600)
+
+    @staticmethod
+    def _fingerprint(payload):
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+    @classmethod
+    def _upgrade(cls, con):
+        # Version 1 dropped the model label from request fingerprints; recompute stored hashes once.
+        if con.execute("PRAGMA user_version").fetchone()[0] >= 1:
+            return
+        con.execute("BEGIN IMMEDIATE")
+        for row in con.execute("SELECT rowid, operation, result_id FROM requests").fetchall():
+            if row["operation"] == "post_message":
+                m = con.execute("SELECT thread_id, body, kind, parent_id FROM messages WHERE id=?", (row["result_id"],)).fetchone()
+                payload = [m["thread_id"], m["body"], m["kind"], m["parent_id"]]
+            else:
+                t = con.execute("SELECT project_id, title FROM threads WHERE id=?", (row["result_id"],)).fetchone()
+                m = con.execute("SELECT body, kind FROM messages WHERE thread_id=? ORDER BY id LIMIT 1", (row["result_id"],)).fetchone()
+                payload = [t["project_id"], t["title"], m["body"], m["kind"]]
+            con.execute("UPDATE requests SET fingerprint=? WHERE rowid=?", (cls._fingerprint(payload), row["rowid"]))
+        con.execute("PRAGMA user_version=1")
+        con.commit()
 
     @contextmanager
     def connect(self, write=False, transaction=True):
@@ -106,7 +129,7 @@ class Store:
         if request_id is None:
             return None
         clean_text(request_id, "request_id", 200)
-        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        fingerprint = Store._fingerprint(payload)
         if result_id is not None:
             con.execute("INSERT INTO requests VALUES (?,?,?,?,?)", (author, request_id, operation, fingerprint, result_id))
             return result_id
@@ -120,7 +143,8 @@ class Store:
     @staticmethod
     def _message_args(author, body, kind, model):
         author_name(author)
-        body = clean_text(body, "body", 100_000)
+        clean_text(body, "body", 100_000)
+        body = body.rstrip()
         if kind not in KINDS:
             raise ValueError("Unknown message kind")
         if model is not None:
@@ -141,7 +165,7 @@ class Store:
     @staticmethod
     def _thread(con, thread_id, author):
         thread = Store._require(con, "threads", thread_id)
-        stats = con.execute("""SELECT COUNT(*) message_count,
+        stats = con.execute("""SELECT COUNT(*) message_count, MIN(id) first_message_id,
             COALESCE(SUM(id > COALESCE((SELECT message_id FROM read_markers WHERE thread_id=? AND author=?),0)
             AND author != ?),0) unread_count FROM messages WHERE thread_id=?""", (thread_id, author, author, thread_id)).fetchone()
         thread.update(dict(stats))
@@ -191,7 +215,7 @@ class Store:
     def create_thread(self, author, project_id, title, body, kind="note", model=None, request_id=None):
         title = clean_text(title, "title", 300)
         body, model = self._message_args(author, body, kind, model)
-        payload = [project_id, title, body, kind, model]
+        payload = [project_id, title, body, kind]
         with self.connect(write=True) as con:
             result_id = self._request(con, author, request_id, "create_thread", payload)
             if result_id is not None:
@@ -203,20 +227,31 @@ class Store:
             self._request(con, author, request_id, "create_thread", payload, result_id)
             return self._thread(con, result_id, author)
 
-    def read_thread(self, author, thread_id, after=0, limit=100):
+    def read_thread(self, author, thread_id, after=0, limit=100, max_bytes=200_000):
         author_name(author)
         if after < 0 or not 1 <= limit <= 500:
             raise ValueError("after must be nonnegative; limit must be between 1 and 500")
+        if not 1_000 <= max_bytes <= 10_000_000:
+            raise ValueError("max_bytes must be between 1000 and 10000000")
         with self.connect() as con:
             thread = self._thread(con, thread_id, author)
             rows = [dict(row) for row in con.execute("SELECT * FROM messages WHERE thread_id=? AND id>? ORDER BY id LIMIT ?", (thread_id, after, limit+1))]
             has_more = len(rows) > limit
             rows = rows[:limit]
+            # Always return at least one message so a single oversized body cannot stall paging.
+            total, kept = 0, 0
+            for row in rows:
+                total += len(row["body"].encode())
+                if kept and total > max_bytes:
+                    break
+                kept += 1
+            has_more = has_more or kept < len(rows)
+            rows = rows[:kept]
             return {"thread": thread, "messages": rows, "has_more": has_more, "next_after": rows[-1]["id"] if rows else after}
 
     def post_message(self, author, thread_id, body, kind="note", parent_id=None, model=None, request_id=None):
         body, model = self._message_args(author, body, kind, model)
-        payload = [thread_id, body, kind, parent_id, model]
+        payload = [thread_id, body, kind, parent_id]
         with self.connect(write=True) as con:
             result_id = self._request(con, author, request_id, "post_message", payload)
             if result_id is not None:
@@ -248,7 +283,7 @@ class Store:
             thread = self._require(con, "threads", thread_id)
             if thread["status"] != status:
                 con.execute("UPDATE threads SET status=? WHERE id=?", (status,thread_id))
-                self._insert_message(con, thread_id, author, model, f"Discussion status changed from {thread['status']} to {status}.", "evidence")
+                self._insert_message(con, thread_id, author, model, f"Discussion status changed from {thread['status']} to {status}.", "note")
             return self._thread(con, thread_id, author)
 
     def search_messages(self, author, q, project_id=None, limit=100):
@@ -258,10 +293,23 @@ class Store:
             raise ValueError("limit must be between 1 and 500")
         pattern = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         with self.connect() as con:
-            return [dict(row) for row in con.execute("""SELECT m.*, t.title thread_title, t.project_id, p.name project_name
+            rows = con.execute("""SELECT m.id, m.thread_id, m.author, m.model, m.kind, m.parent_id, m.created_at, m.body,
+                t.title thread_title, t.project_id, p.name project_name
                 FROM messages m JOIN threads t ON m.thread_id=t.id JOIN projects p ON t.project_id=p.id
                 WHERE (m.body LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\')
-                AND (? IS NULL OR t.project_id=?) ORDER BY m.id DESC LIMIT ?""", (pattern,pattern,project_id,project_id,limit))]
+                AND (? IS NULL OR t.project_id=?) ORDER BY m.id DESC LIMIT ?""", (pattern,pattern,project_id,project_id,limit))
+            return [self._snippet(dict(row), q) for row in rows]
+
+    @staticmethod
+    def _snippet(row, q, width=300):
+        # Search returns an excerpt around the first match, not whole bodies, to bound assistant context.
+        body = row.pop("body")
+        index = body.lower().find(q.lower())
+        start = max(0, index - width // 3) if index >= 0 else 0
+        end = min(len(body), start + width)
+        row["snippet"] = ("…" if start else "") + body[start:end] + ("…" if end < len(body) else "")
+        row["body_length"] = len(body)
+        return row
 
     def export_thread(self, author, thread_id):
         author_name(author)
