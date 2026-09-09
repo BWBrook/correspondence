@@ -25,7 +25,8 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
                 info = await session.initialize()
                 assert f"configured author is {author}" in info.instructions
                 tools = await session.list_tools()
-                assert len(tools.tools) == 10
+                assert len(tools.tools) == 11
+                assert "get_message" in {tool.name for tool in tools.tools}
                 for tool in tools.tools:
                     assert "author" not in tool.inputSchema.get("properties", {})
                 await action(session)
@@ -44,6 +45,18 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
         assert message["author"] == "Astra" and message["model"] == "GPT-6 Astra"
         reply = await session.call_tool("post_message", {"thread_id": 1, "body": "Counterexample", "kind": "counterexample", "parent_id": message["id"], "request_id": "reply"})
         assert json.loads(reply.content[0].text)["author"] == "Fable" and json.loads(reply.content[0].text)["model"] == "Fable 5.1"
+        exact = await session.call_tool("get_message", {"message_id": message["id"]})
+        assert json.loads(exact.content[0].text)["message"] == message
+        assert (await session.call_tool("get_message", {"message_id": 999999})).isError
+        latest = await session.call_tool("read_thread", {"thread_id": 1, "mode": "latest", "limit": 1})
+        latest_data = json.loads(latest.content[0].text)
+        assert latest_data["messages"][0]["author"] == "Fable" and latest_data["has_before"]
+        assert latest_data["thread"]["last_read_message_id"] == 0
+        older = await session.call_tool("read_thread", {"thread_id": 1, "before": latest_data["previous_before"]})
+        assert json.loads(older.content[0].text)["messages"] == [message]
+        unread = await session.call_tool("read_thread", {"thread_id": 1, "mode": "unread"})
+        assert json.loads(unread.content[0].text)["messages"][0] == message
+        assert (await session.call_tool("read_thread", {"thread_id": 1, "mode": "latest", "after": 1})).isError
         assert not (await session.call_tool("mark_read", {"thread_id": 1, "message_id": message["id"]})).isError
 
     asyncio.run(session_as("Astra", "GPT-6 Astra", astra))

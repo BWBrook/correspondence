@@ -149,10 +149,35 @@ export function CreateForm({ type, projectId, onCreated, close }) {
     </Modal>
   );
 }
-export function Message({ message, onReply, messages }) {
+export function Message({
+  message,
+  onReply,
+  messages,
+  onNavigate,
+  highlighted,
+  onMarkRead,
+  readBusy,
+}) {
   const parent = messages.find((m) => m.id === message.parent_id);
+  function follow(event, id) {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
+    event.preventDefault();
+    onNavigate(id);
+  }
   return (
-    <article className="message" id={`message-${message.id}`}>
+    <article
+      className={`message${highlighted ? " highlighted" : ""}`}
+      id={`message-${message.id}`}
+      tabIndex={-1}
+      aria-label={`Message ${message.id} by ${message.author}`}
+    >
       <div className={`avatar ${message.author.toLowerCase()}`}>
         {message.author[0]}
       </div>
@@ -164,6 +189,7 @@ export function Message({ message, onReply, messages }) {
             className="message-number"
             href={`#thread=${message.thread_id}&message=${message.id}`}
             aria-label={`Link to message ${message.id}`}
+            onClick={(event) => follow(event, message.id)}
           >
             #{message.id}
           </a>
@@ -175,6 +201,7 @@ export function Message({ message, onReply, messages }) {
           <a
             className="reply-reference"
             href={`#thread=${message.thread_id}&message=${message.parent_id}`}
+            onClick={(event) => follow(event, message.parent_id)}
           >
             <CornerDownRight size={14} /> Reply to {parent?.author || "message"}{" "}
             #{message.parent_id}
@@ -199,17 +226,35 @@ export function Message({ message, onReply, messages }) {
             {message.body}
           </Markdown>
         </div>
-        <button
-          className="text-button reply-button"
-          onClick={() => onReply(message)}
-        >
-          <CornerDownRight size={14} /> Reply
-        </button>
+        <div className="message-actions">
+          <button
+            className="text-button reply-button"
+            onClick={() => onReply(message)}
+          >
+            <CornerDownRight size={14} /> Reply
+          </button>
+          {onMarkRead && (
+            <button
+              className="text-button mark-through"
+              disabled={readBusy}
+              title="Includes all earlier messages in this discussion"
+              onClick={onMarkRead}
+            >
+              Mark read through #{message.id}
+            </button>
+          )}
+        </div>
       </div>
     </article>
   );
 }
-export function Composer({ threadId, replyTo, clearReply, onPosted }) {
+export function Composer({
+  threadId,
+  replyTo,
+  clearReply,
+  onPosting,
+  onPosted,
+}) {
   const key = `correspondence:draft:${threadId}`;
   const [body, setBody] = useState(() => {
     try {
@@ -242,8 +287,9 @@ export function Composer({ threadId, replyTo, clearReply, onPosted }) {
       request.current = { signature, id: crypto.randomUUID() };
     setBusy(true);
     setError("");
+    const postingContext = onPosting();
     try {
-      await post(`/threads/${threadId}/messages`, {
+      const result = await post(`/threads/${threadId}/messages`, {
         ...payload,
         request_id: request.current.id,
       });
@@ -257,7 +303,7 @@ export function Composer({ threadId, replyTo, clearReply, onPosted }) {
       setBody("");
       clearReply();
       request.current = {};
-      onPosted();
+      onPosted(result, postingContext);
     } catch (e) {
       setError(e.message);
     } finally {

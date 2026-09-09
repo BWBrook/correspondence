@@ -165,14 +165,16 @@ class Store:
     @staticmethod
     def _thread(con, thread_id, author):
         thread = Store._require(con, "threads", thread_id)
+        marker = con.execute("SELECT message_id FROM read_markers WHERE thread_id=? AND author=?", (thread_id, author)).fetchone()
+        last_read = marker[0] if marker else 0
         stats = con.execute("""SELECT COUNT(*) message_count, MIN(id) first_message_id,
-            COALESCE(SUM(id > COALESCE((SELECT message_id FROM read_markers WHERE thread_id=? AND author=?),0)
-            AND author != ?),0) unread_count FROM messages WHERE thread_id=?""", (thread_id, author, author, thread_id)).fetchone()
+            MAX(id) last_message_id, COALESCE(SUM(id>? AND author!=?),0) unread_count,
+            MIN(CASE WHEN id>? AND author!=? THEN id END) first_unread_message_id
+            FROM messages WHERE thread_id=?""", (last_read, author, last_read, author, thread_id)).fetchone()
         thread.update(dict(stats))
         last = con.execute("SELECT author FROM messages WHERE thread_id=? ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
         thread["last_author"] = last[0] if last else None
-        marker = con.execute("SELECT message_id FROM read_markers WHERE thread_id=? AND author=?", (thread_id, author)).fetchone()
-        thread["last_read_message_id"] = marker[0] if marker else 0
+        thread["last_read_message_id"] = last_read
         return thread
 
     def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None):
@@ -227,27 +229,56 @@ class Store:
             self._request(con, author, request_id, "create_thread", payload, result_id)
             return self._thread(con, result_id, author)
 
-    def read_thread(self, author, thread_id, after=0, limit=100, max_bytes=200_000):
+    def read_thread(self, author, thread_id, after=0, limit=100, max_bytes=200_000, *, mode="oldest", before=None):
         author_name(author)
         if after < 0 or not 1 <= limit <= 500:
             raise ValueError("after must be nonnegative; limit must be between 1 and 500")
         if not 1_000 <= max_bytes <= 10_000_000:
             raise ValueError("max_bytes must be between 1000 and 10000000")
+        if mode not in {"oldest", "latest", "unread"}:
+            raise ValueError("mode must be oldest, latest, or unread")
+        if before is not None and (not isinstance(before, int) or before < 1):
+            raise ValueError("before must be a positive message id")
+        if (before is not None and after != 0) or (mode != "oldest" and (after != 0 or before is not None)):
+            raise ValueError("Use either after, before, or a latest/unread mode, not a combination")
         with self.connect() as con:
             thread = self._thread(con, thread_id, author)
-            rows = [dict(row) for row in con.execute("SELECT * FROM messages WHERE thread_id=? AND id>? ORDER BY id LIMIT ?", (thread_id, after, limit+1))]
-            has_more = len(rows) > limit
-            rows = rows[:limit]
+            if mode == "unread":
+                first_unread = thread["first_unread_message_id"]
+                if first_unread is None:
+                    mode = "latest"
+                else:
+                    after = first_unread - 1
+            backwards = mode == "latest" or before is not None
+            if before is not None:
+                candidates = con.execute("SELECT * FROM messages WHERE thread_id=? AND id<? ORDER BY id DESC LIMIT ?", (thread_id, before, limit))
+            elif backwards:
+                candidates = con.execute("SELECT * FROM messages WHERE thread_id=? ORDER BY id DESC LIMIT ?", (thread_id, limit))
+            else:
+                candidates = con.execute("SELECT * FROM messages WHERE thread_id=? AND id>? ORDER BY id LIMIT ?", (thread_id, after, limit))
             # Always return at least one message so a single oversized body cannot stall paging.
-            total, kept = 0, 0
-            for row in rows:
-                total += len(row["body"].encode())
-                if kept and total > max_bytes:
+            total, rows = 0, []
+            for row in candidates:
+                size = len(row["body"].encode("utf-8"))
+                if rows and total + size > max_bytes:
                     break
-                kept += 1
-            has_more = has_more or kept < len(rows)
-            rows = rows[:kept]
-            return {"thread": thread, "messages": rows, "has_more": has_more, "next_after": rows[-1]["id"] if rows else after}
+                total += size
+                rows.append(dict(row))
+            if backwards:
+                rows.reverse()
+            first = rows[0]["id"] if rows else None
+            last = rows[-1]["id"] if rows else None
+            return {"thread": thread, "messages": rows,
+                    "has_more": bool(rows and thread["last_message_id"] > last),
+                    "next_after": last if rows else after,
+                    "has_before": bool(rows and thread["first_message_id"] < first),
+                    "previous_before": first}
+
+    def get_message(self, author, message_id):
+        author_name(author)
+        with self.connect() as con:
+            message = self._require(con, "messages", message_id)
+            return {"thread": self._thread(con, message["thread_id"], author), "message": message}
 
     def post_message(self, author, thread_id, body, kind="note", parent_id=None, model=None, request_id=None):
         body, model = self._message_args(author, body, kind, model)

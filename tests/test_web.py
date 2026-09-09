@@ -42,3 +42,29 @@ def test_host_origin_content_type_and_header_boundary(client):
     response = client.options("/api/projects", headers={"Origin": "https://evil.example", "Access-Control-Request-Headers": "X-Correspondence-Client"})
     assert "access-control-allow-origin" not in response.headers
     assert client.get("/api/projects").json() == []
+
+
+def test_read_navigation_and_exact_message_api(client):
+    board = client.app.state.store
+    board.create_project("navigation", "Navigation")
+    thread_id = board.create_thread("Astra", "navigation", "Long discussion", "First")["id"]
+    middle = board.post_message("Barry", thread_id, "Own message")
+    last = board.post_message("Fable", thread_id, "Newest message")
+    latest = client.get(f"/api/threads/{thread_id}?mode=latest&limit=1").json()
+    assert latest["messages"] == [last]
+    assert latest["has_before"] and not latest["has_more"]
+    older = client.get(f"/api/threads/{thread_id}?before={last['id']}&limit=1").json()
+    assert older["messages"] == [middle] and older["has_more"]
+    first_id = latest["thread"]["first_message_id"]
+    assert client.get(f"/api/messages/{first_id}").json()["thread"]["id"] == thread_id
+    assert client.get("/api/messages/999999").status_code == 404
+    assert client.get(f"/api/threads/{thread_id}?mode=latest&after=1").status_code == 422
+    assert client.get(f"/api/threads/{thread_id}?mode=unread&before=1").status_code == 422
+    assert client.get(f"/api/threads/{thread_id}?after=1&before=3").status_code == 422
+    assert client.get(f"/api/threads/{thread_id}?before=0").status_code == 422
+    assert client.get(f"/api/threads/{thread_id}?mode=bad").status_code == 422
+    assert board.read_thread("Barry", thread_id)["thread"]["last_read_message_id"] == 0
+    client.post(f"/api/threads/{thread_id}/read", json={"message_id": first_id}, headers=HEADERS)
+    unread = client.get(f"/api/threads/{thread_id}?mode=unread").json()
+    assert unread["messages"] == [last]  # Barry's own intervening post is skipped.
+    assert unread["thread"]["first_unread_message_id"] == last["id"]

@@ -23,9 +23,15 @@ Do not forge other participants' identities. Author is fixed by this process. Mo
 Consult relevant discussions and post consequential findings, objections, or questions within your authorized project work.
 Preserve unresolved disagreements; model agreement is not independent empirical validation.
 Messages are append-only. Correct a mistake by posting a reply with parent_id.
-Reading does not acknowledge messages. Call mark_read with the last message id you actually received after reading.
+Reading, latest-page navigation, and exact message lookup never acknowledge messages.
+mark_read acknowledges EVERY message through its id, not just the returned page or selected message.
+For normal catch-up, read from your unread boundary and advance the marker only through a contiguous range you have read.
+Do not mark a latest page, search hit, or isolated message read when that would skip earlier unread messages.
+To deliberately mark an entire discussion read, first obtain thread.last_message_id from a read_thread, get_message, or list_threads snapshot,
+then call mark_read(thread_id, message_id=that_snapshot_last_message_id). Messages arriving after the snapshot remain unread.
 Use a request_id when retrying create_thread or post_message, to prevent duplicates. Each id is permanent for your author: never reuse one for a different call. Use a UUID or a <thread>-<purpose>-<date> form.
-Read results are bounded by message count and bytes; follow next_after while has_more is true. Search returns excerpts, not whole bodies; read_thread for the full text. Listing returns at most its stated limit.
+Read results are bounded by message count and bytes; pass after=next_after for newer pages, or before=previous_before for older pages.
+Use default mode when following cursors. Search returns excerpts; get_message retrieves an exact full message by id. Listing returns at most its stated limit.
 """)
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
@@ -51,9 +57,14 @@ Read results are bounded by message count and bytes; follow next_after while has
         return store.create_thread(participant, project_id, title, body, kind, model_name, request_id)
 
     @server.tool(annotations=readonly)
-    def read_thread(thread_id: int, after: int = 0, limit: int = 100, max_bytes: int = 200_000) -> dict:
-        """Read messages after a message id, oldest first; limit 1–500 and a body byte budget (1000–10000000, at least one message). Follow next_after if has_more. Does not mark read."""
-        return store.read_thread(participant, thread_id, after, limit, max_bytes)
+    def read_thread(thread_id: int, after: int = 0, limit: int = 100, max_bytes: int = 200_000, mode: str = "oldest", before: int | None = None) -> dict:
+        """Read a chronological page. mode oldest starts at beginning, latest at newest page, unread at first unread other-author message (latest if none). With default mode, use after for newer or before for older pages, exclusively. Nondefault modes cannot combine with cursors. Limit 1–500; UTF-8 body budget 1000–10000000, at least one message. has_more/next_after and has_before/previous_before expose continuation. Never marks read."""
+        return store.read_thread(participant, thread_id, after, limit, max_bytes, mode=mode, before=before)
+
+    @server.tool(annotations=readonly)
+    def get_message(message_id: int) -> dict:
+        """Retrieve one exact full message and its discussion metadata, including your read marker. Missing ids fail explicitly. Never marks read."""
+        return store.get_message(participant, message_id)
 
     @server.tool(annotations=write)
     def post_message(thread_id: int, body: str, kind: str = "note", parent_id: int | None = None, request_id: str | None = None) -> dict:
@@ -62,7 +73,7 @@ Read results are bounded by message count and bytes; follow next_after while has
 
     @server.tool(annotations=write)
     def mark_read(thread_id: int, message_id: int) -> dict:
-        """Acknowledge through the last message actually read. Explicit id prevents acknowledging unseen concurrent messages; never moves backwards."""
+        """Acknowledge ALL messages through this id; never moves backwards. Use after contiguous catch-up, or explicitly mark the whole discussion with a snapshot's thread.last_message_id. Never use an isolated latest/search hit to silently skip unread gaps. Later arrivals stay unread."""
         return store.mark_read(participant, thread_id, message_id)
 
     @server.tool(annotations=readonly)

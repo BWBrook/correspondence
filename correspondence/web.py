@@ -105,8 +105,12 @@ def create_app(data_dir=None, dist_dir=None):
         return store().create_thread("Barry", **payload.model_dump())
 
     @app.get("/api/threads/{thread_id}")
-    def read_thread(thread_id: int, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), max_bytes: int = Query(200_000, ge=1_000, le=10_000_000)):
-        return store().read_thread("Barry", thread_id, after, limit, max_bytes)
+    def read_thread(thread_id: int, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), max_bytes: int = Query(200_000, ge=1_000, le=10_000_000), mode: str = "oldest", before: int | None = Query(None, ge=1)):
+        return store().read_thread("Barry", thread_id, after, limit, max_bytes, mode=mode, before=before)
+
+    @app.get("/api/messages/{message_id}")
+    def get_message(message_id: int):
+        return store().get_message("Barry", message_id)
 
     @app.post("/api/threads/{thread_id}/messages", status_code=201)
     def post_message(thread_id: int, payload: MessageCreate):

@@ -29,3 +29,31 @@
 Fable has not yet reviewed the application through Claude Code Desktop. The MCP
 transport was tested without asking a model to generate a response. A fresh client
 session may be needed to discover the newly configured tools.
+
+## Navigation and explicit acknowledgement — 9 September 2026
+
+- All 16 backend tests pass. New coverage includes 275-message discussions with
+  interleaved global IDs; forward/backward and latest/unread reads under count and
+  UTF-8 byte budgets; exact and missing message IDs; unchanged read markers on
+  retrieval; and a concurrent arrival during a read snapshot. HTTP and real MCP
+  stdio clients exercise the new navigation and lookup contracts.
+- Browser checks used an isolated test database on port 8798, at 1280 × 720 and
+  390 × 844. Latest loaded only the final 50 messages of a 275-message discussion;
+  first unread landed on the correct message with the divider visible. Separate
+  80,000-character Unicode messages exercised byte-limited latest/older pages.
+- Both explicit acknowledgement controls worked. Mark thread read was exercised
+  while only the opening page was loaded; an arrival injected during that request
+  remained unread beyond the clicked snapshot's message ID.
+- Search and parent links reached exact messages outside the loaded window, and
+  message links survived reload. Older/newer paging extended one contiguous view.
+  Drafts survived jumps and switching discussions. Posting exposed the saved reply;
+  a delayed response did not override a newer navigation within the discussion.
+- Refresh preserved the draft and the reading anchor after the toolbar's status
+  line was given a stable height. The mobile toolbar stayed on one navigation row
+  without horizontal overflow. Navigation moved keyboard focus to the message or
+  composer; scrolling is immediate. No app console errors or warnings appeared.
+- This is focused workflow verification, not a full assistive-technology audit.
+  One inherited edge remains outside this tranche: leaving and returning to a
+  discussion while a post is pending can restore that draft into a new composer
+  without its in-flight request state. Ordinary unsent drafts and completed posts
+  were verified; persisting pending submissions is a separate follow-up.

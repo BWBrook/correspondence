@@ -142,3 +142,117 @@ def test_status_audit_and_validation(board):
         board.post_message("Astra", first, "  ")
     with pytest.raises(ValueError):
         board.create_project("../../bad", "Invalid")
+
+
+@pytest.fixture
+def long_board(board):
+    primary = thread(board)
+    other = thread(board, "A different discussion")
+    ids = [board.read_thread("Fable", primary)["messages"][0]["id"]]
+    for i in range(1, 275):
+        body = "🦘" * 700 if i % 23 == 0 else f"Message {i}: évidence. " * 12
+        message = board.post_message("Fable" if i % 3 == 0 else "Astra", primary, body)
+        ids.append(message["id"])
+        if i % 5 == 0:
+            board.post_message("Barry", other, "Interleave global message ids")
+    return board, primary, ids
+
+
+def test_long_thread_bidirectional_count_and_byte_pages(long_board):
+    board, thread_id, expected = long_board
+
+    def check_page(page, limit, budget):
+        messages = page["messages"]
+        ids = [m["id"] for m in messages]
+        assert ids == sorted(ids) and len(ids) <= limit
+        assert len(ids) == 1 or sum(len(m["body"].encode("utf-8")) for m in messages) <= budget
+        assert page["next_after"] == ids[-1] and page["previous_before"] == ids[0]
+        assert page["has_before"] == (ids[0] != expected[0])
+        assert page["has_more"] == (ids[-1] != expected[-1])
+        return ids
+
+    for limit in [1, 31, 500]:
+        for budget in [1000, 5000, 200_000]:
+            page = board.read_thread("Fable", thread_id, limit=limit, max_bytes=budget)
+            forward = []
+            while True:
+                forward.extend(check_page(page, limit, budget))
+                if not page["has_more"]:
+                    break
+                page = board.read_thread("Fable", thread_id, page["next_after"], limit, budget)
+            assert forward == expected
+            page = board.read_thread("Fable", thread_id, limit=limit, max_bytes=budget, mode="latest")
+            backwards = []
+            while True:
+                backwards = check_page(page, limit, budget) + backwards
+                if not page["has_before"]:
+                    break
+                page = board.read_thread("Fable", thread_id, limit=limit, max_bytes=budget, before=page["previous_before"])
+            assert backwards == expected
+    assert board.read_thread("Fable", thread_id)["thread"]["last_read_message_id"] == 0
+
+
+def test_unread_entry_skips_own_posts_and_latest_fallback(long_board):
+    board, thread_id, ids = long_board
+    board.mark_read("Fable", thread_id, ids[119])
+    # Index 120 is Fable's own post; unread starts at index 121.
+    page = board.read_thread("Fable", thread_id, limit=5, mode="unread")
+    assert page["thread"]["first_unread_message_id"] == ids[121]
+    assert [m["id"] for m in page["messages"]] == ids[121:126]
+    assert page["thread"]["last_read_message_id"] == ids[119]
+    assert page["thread"]["last_message_id"] == ids[-1]
+    assert board.list_threads("Fable", "demo", unread_only=True)[0]["first_unread_message_id"] == ids[121]
+    board.mark_read("Fable", thread_id, ids[-1])
+    own = board.post_message("Fable", thread_id, "My latest post does not create unread work")
+    fallback = board.read_thread("Fable", thread_id, limit=3, mode="unread")
+    assert fallback == board.read_thread("Fable", thread_id, limit=3, mode="latest")
+    assert fallback["messages"][-1]["id"] == own["id"]
+    assert fallback["thread"]["first_unread_message_id"] is None
+    assert fallback["thread"]["unread_count"] == 0
+
+
+def test_exact_message_lookup_and_navigation_validation(board):
+    from correspondence.store import NotFound
+    first = thread(board)
+    second = thread(board)
+    message = board.post_message("Astra", second, "Exact target")
+    result = board.get_message("Fable", message["id"])
+    assert result["message"] == message and result["thread"]["id"] == second
+    assert result["thread"]["last_read_message_id"] == 0
+    with pytest.raises(NotFound):
+        board.get_message("Fable", message["id"] + 1)
+    invalid = [{"mode": "unknown"}, {"mode": "latest", "after": 1},
+               {"mode": "unread", "after": 1}, {"mode": "latest", "before": 2},
+               {"mode": "unread", "before": 2}, {"after": 1, "before": 2},
+               {"before": 0}, {"before": -1}]
+    for kwargs in invalid:
+        with pytest.raises(ValueError):
+            board.read_thread("Fable", first, **kwargs)
+    empty = board.read_thread("Fable", first, before=1)
+    assert empty["messages"] == [] and empty["previous_before"] is None
+    assert not empty["has_more"] and not empty["has_before"]
+    empty = board.read_thread("Fable", first, after=message["id"])
+    assert empty["messages"] == [] and empty["next_after"] == message["id"]
+
+
+def test_read_snapshot_and_explicit_whole_thread_acknowledgement(board, monkeypatch):
+    thread_id = thread(board)
+    original = board._thread
+    arrived = []
+
+    def race_after_metadata(con, requested_thread, author):
+        metadata = original(con, requested_thread, author)
+        if not arrived:
+            arrived.append(board.post_message("Astra", thread_id, "Arrived after snapshot began"))
+        return metadata
+
+    monkeypatch.setattr(board, "_thread", race_after_metadata)
+    snapshot = board.read_thread("Fable", thread_id, mode="latest")
+    assert len(snapshot["messages"]) == 1
+    assert snapshot["thread"]["last_message_id"] < arrived[0]["id"]
+    assert snapshot["thread"]["message_count"] == 1
+    monkeypatch.setattr(board, "_thread", original)
+    board.mark_read("Fable", thread_id, snapshot["thread"]["last_message_id"])
+    current = board.read_thread("Fable", thread_id, mode="unread")
+    assert current["thread"]["unread_count"] == 1
+    assert current["messages"][0]["id"] == arrived[0]["id"]

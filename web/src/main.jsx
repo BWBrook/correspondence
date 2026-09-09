@@ -4,42 +4,40 @@ import {
   Plus,
   Search,
   RefreshCw,
-  Download,
   UserRound,
   Monitor,
-  ArrowLeft,
   FolderOpen,
 } from "lucide-react";
-import { api, post } from "./api";
-import { Composer, CreateForm, Message } from "./components";
+import { api } from "./api";
+import { CreateForm } from "./components";
+import { ThreadReader } from "./ThreadReader";
 import "./style.css";
 
-function selectedFromHash() {
-  return (
-    Number(new URLSearchParams(location.hash.slice(1)).get("thread")) || null
-  );
+function routeFromHash() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  return {
+    threadId: Number(params.get("thread")) || null,
+    messageId: Number(params.get("message")) || null,
+    mode: ["latest", "unread"].includes(params.get("view"))
+      ? params.get("view")
+      : "oldest",
+  };
 }
 function App() {
   const [projects, setProjects] = useState([]),
     [projectId, setProjectId] = useState(null);
   const [threads, setThreads] = useState([]),
-    [threadId, setThreadId] = useState(selectedFromHash);
-  const [detail, setDetail] = useState(null),
-    [unreadOnly, setUnreadOnly] = useState(false);
+    [route, setRoute] = useState(routeFromHash);
+  const threadId = route.threadId;
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [query, setQuery] = useState(""),
     [results, setResults] = useState(null),
     [searching, setSearching] = useState(false);
   const [modal, setModal] = useState(null),
-    [error, setError] = useState(""),
-    [replyTo, setReplyTo] = useState(null);
-  const [loading, setLoading] = useState(false),
-    [statusBusy, setStatusBusy] = useState(false);
-  const currentThread = useRef(threadId),
-    currentProject = useRef(projectId),
+    [error, setError] = useState("");
+  const currentProject = useRef(projectId),
     currentUnread = useRef(unreadOnly),
-    listRequest = useRef(0),
-    readPane = useRef(null);
-  currentThread.current = threadId;
+    listRequest = useRef(0);
   currentProject.current = projectId;
   currentUnread.current = unreadOnly;
   const project = projects.find((p) => p.id === projectId);
@@ -67,34 +65,9 @@ function App() {
     )
       setThreads(list);
   }, []);
-  const loadThread = useCallback(
-    async (id, append = false, after = 0) => {
-      if (!id) return;
-      if (currentThread.current !== id) return;
-      setLoading(true);
-      try {
-        const result = await api(`/threads/${id}?after=${after}&limit=100`);
-        if (currentThread.current !== id) return;
-        setDetail((prev) =>
-          append && prev?.thread.id === id
-            ? { ...result, messages: [...prev.messages, ...result.messages] }
-            : result,
-        );
-        setProjectId(result.thread.project_id);
-        const last = result.messages.at(-1);
-        if (last && document.visibilityState === "visible") {
-          await post(`/threads/${id}/read`, { message_id: last.id });
-          await refreshProjects();
-          await refreshList();
-        }
-      } catch (e) {
-        if (currentThread.current === id) setError(e.message);
-      } finally {
-        if (currentThread.current === id) setLoading(false);
-      }
-    },
-    [refreshProjects, refreshList],
-  );
+  const refreshCounts = useCallback(async () => {
+    await Promise.all([refreshProjects(), refreshList()]);
+  }, [refreshProjects, refreshList]);
   useEffect(() => {
     refreshProjects().catch((e) => setError(e.message));
   }, [refreshProjects]);
@@ -111,38 +84,10 @@ function App() {
     return () => clearInterval(poll);
   }, [refreshProjects, refreshList]);
   useEffect(() => {
-    setDetail(null);
-    setReplyTo(null);
-    setError("");
-    setLoading(false);
-    if (threadId) loadThread(threadId);
-    // Fetch on selection only; refreshing counts must not reload a reader's discussion.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
-  useEffect(() => {
-    const handler = () => {
-      const id = selectedFromHash();
-      if (id) setThreadId(id);
-      const message = Number(
-        new URLSearchParams(location.hash.slice(1)).get("message"),
-      );
-      if (message)
-        document
-          .getElementById(`message-${message}`)
-          ?.scrollIntoView({ block: "start" });
-    };
+    const handler = () => setRoute(routeFromHash());
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
-  useEffect(() => {
-    const message = Number(
-      new URLSearchParams(location.hash.slice(1)).get("message"),
-    );
-    if (message)
-      document
-        .getElementById(`message-${message}`)
-        ?.scrollIntoView({ block: "start" });
-  }, [detail]);
   useEffect(() => {
     const controller = new AbortController();
     setResults(null);
@@ -169,28 +114,23 @@ function App() {
       controller.abort();
     };
   }, [query, projectId]);
+  function navigate(id, { messageId = null, mode = "oldest" } = {}) {
+    const params = new URLSearchParams({ thread: id });
+    if (messageId) params.set("message", messageId);
+    else if (mode !== "oldest") params.set("view", mode);
+    const hash = `#${params}`;
+    if (location.hash !== hash) history.pushState(null, "", hash);
+    setRoute({ threadId: id, messageId, mode });
+    setQuery("");
+  }
   function selectThread(id) {
-    setThreadId(id);
-    location.hash = `thread=${id}`;
+    navigate(id);
   }
   function selectProject(id) {
     setProjectId(id);
-    setThreadId(null);
-    setDetail(null);
+    setRoute({ threadId: null, messageId: null, mode: "oldest" });
     setQuery("");
-    history.replaceState(null, "", location.pathname);
-  }
-  async function changeStatus(status) {
-    setStatusBusy(true);
-    try {
-      await post(`/threads/${threadId}/status`, { status });
-      await loadThread(threadId);
-      await refreshList();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setStatusBusy(false);
-    }
+    history.pushState(null, "", location.pathname);
   }
   function created(result) {
     const type = modal;
@@ -205,9 +145,6 @@ function App() {
       selectThread(result.id);
     }
   }
-  const listed = threads.find((t) => t.id === threadId);
-  const newMessages =
-    detail && listed && listed.message_count > detail.thread.message_count;
   return (
     <div className={`app ${threadId ? "reading" : ""}`}>
       <aside className="sidebar">
@@ -297,6 +234,11 @@ function App() {
             <Plus size={17} /> New discussion
           </button>
         </div>
+        {error && (
+          <p className="error-banner" role="alert">
+            {error}
+          </p>
+        )}
         <div className="thread-list">
           {query.trim() ? (
             <>
@@ -310,8 +252,7 @@ function App() {
                   className="thread-row search-result"
                   key={m.id}
                   onClick={() => {
-                    setQuery("");
-                    selectThread(m.thread_id);
+                    navigate(m.thread_id, { messageId: m.id });
                   }}
                 >
                   <h3>{m.thread_title}</h3>
@@ -355,104 +296,23 @@ function App() {
           </div>
         )}
       </section>
-      <main className="reader" ref={readPane}>
-        {error && (
-          <div className="error-banner" role="alert">
-            {error}
-            <button className="text-button" onClick={() => setError("")}>
-              Dismiss
-            </button>
-          </div>
-        )}
-        {detail ? (
-          <>
-            <header className="reader-header">
-              <button
-                className="icon mobile-back"
-                aria-label="Back to discussions"
-                onClick={() => selectProject(projectId)}
-              >
-                <ArrowLeft size={20} />
-              </button>
-              <h2>{detail.thread.title}</h2>
-              <div className="reader-actions">
-                <button
-                  className="text-button status-toggle"
-                  disabled={statusBusy}
-                  onClick={() => {
-                    const next =
-                      detail.thread.status === "resolved" ? "open" : "resolved";
-                    if (
-                      confirm(
-                        `Mark this discussion ${next}? This appends a permanent status note.`,
-                      )
-                    )
-                      changeStatus(next);
-                  }}
-                >
-                  {detail.thread.status === "resolved"
-                    ? "Resolved · Reopen"
-                    : "Open · Resolve"}
-                </button>
-                <a
-                  href={`/api/threads/${threadId}/export`}
-                  download={`discussion-${threadId}.md`}
-                >
-                  <Download size={17} /> Export
-                </a>
-              </div>
-            </header>
-            {newMessages && (
-              <button
-                className="new-messages"
-                onClick={() => loadThread(threadId)}
-              >
-                New messages available · Refresh discussion
-              </button>
-            )}
-            <div className="messages">
-              {detail.messages.map((m) => (
-                <Message
-                  key={m.id}
-                  message={m}
-                  messages={detail.messages}
-                  onReply={setReplyTo}
-                />
-              ))}
-            </div>
-            {detail.has_more && (
-              <button
-                className="outline load-more"
-                disabled={loading}
-                onClick={() => loadThread(threadId, true, detail.next_after)}
-              >
-                {loading ? "Loading…" : "Load more messages"}
-              </button>
-            )}
-            <Composer
-              key={threadId}
-              threadId={threadId}
-              replyTo={replyTo}
-              clearReply={() => {
-                if (currentThread.current === threadId) setReplyTo(null);
-              }}
-              onPosted={() => {
-                loadThread(threadId);
-                refreshList().catch((e) => setError(e.message));
-              }}
-            />
-          </>
-        ) : (
+      {threadId ? (
+        <ThreadReader
+          key={threadId}
+          route={route}
+          listed={threads.find((t) => t.id === threadId)}
+          onNavigate={(options) => navigate(threadId, options)}
+          onProject={setProjectId}
+          onBack={() => selectProject(projectId)}
+          onRefresh={refreshCounts}
+        />
+      ) : (
+        <main className="reader">
           <div className="empty-reader">
-            <h2>
-              {loading
-                ? "Loading discussion…"
-                : "Room for another perspective."}
-            </h2>
+            <h2>Room for another perspective.</h2>
             <p>
-              {loading
-                ? "Retrieving the correspondence."
-                : "Choose a discussion, or start one. The reasoning stays here for the next time you return."}
+              Choose a discussion, or start one. The reasoning stays here for
+              the next time you return.
             </p>
             {!projectId && (
               <button onClick={() => setModal("project")}>
@@ -460,8 +320,8 @@ function App() {
               </button>
             )}
           </div>
-        )}
-      </main>
+        </main>
+      )}
       {modal && (
         <CreateForm
           type={modal}
