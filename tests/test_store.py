@@ -256,3 +256,90 @@ def test_read_snapshot_and_explicit_whole_thread_acknowledgement(board, monkeypa
     current = board.read_thread("Fable", thread_id, mode="unread")
     assert current["thread"]["unread_count"] == 1
     assert current["messages"][0]["id"] == arrived[0]["id"]
+
+
+def test_all_participant_acknowledgements_across_projects(board):
+    first = board.create_thread("Astra", "demo", "First", "Astra opening")["id"]
+    second = board.create_thread("Fable", "demo", "Second", "Fable opening")["id"]
+    board.create_project("other", "Other")
+    board.create_project("empty", "Empty")
+    other = board.create_thread("Barry", "other", "Other discussion", "Barry opening")["id"]
+    barry_post = board.post_message("Barry", first, "Barry reply")
+    second_astra = board.post_message("Astra", second, "Astra reply")
+    fable_post = board.post_message("Fable", first, "Fable reply")
+    board.post_message("Astra", other, "Other project reply")
+    board.post_message("Astra", first, "Astra latest")
+    board.mark_read("Barry", first, barry_post["id"])
+    board.mark_read("Astra", first, fable_post["id"])
+    second_opening = board.read_thread("Fable", second)["thread"]["first_message_id"]
+    board.mark_read("Fable", second, second_opening)
+    expected_markers = {"Barry": barry_post["id"], "Astra": fable_post["id"], "Fable": 0}
+    expected_counts = {"Barry": 2, "Astra": 0, "Fable": 3}
+    for participant in ("Barry", "Astra", "Fable"):
+        metadata = board.read_thread(participant, first, mode="latest")["thread"]
+        assert metadata["read_markers"] == expected_markers
+        assert metadata["unread_counts"] == expected_counts
+        assert metadata["last_read_message_id"] == expected_markers[participant]
+        assert metadata["unread_count"] == expected_counts[participant]
+        assert board.get_message(participant, fable_post["id"])["thread"] == metadata
+        threads = {row["id"]: row for row in board.list_threads(participant)}
+        assert threads[first] == metadata
+        assert threads[second]["unread_counts"] == {"Barry": 2, "Astra": 1, "Fable": 1}
+        projects = {row["id"]: row for row in board.list_projects(participant)}
+        assert projects["demo"]["unread_counts"] == {"Barry": 4, "Astra": 1, "Fable": 4}
+        assert projects["other"]["unread_counts"] == {"Barry": 1, "Astra": 1, "Fable": 2}
+        assert projects["empty"]["unread_counts"] == {"Barry": 0, "Astra": 0, "Fable": 0}
+        assert projects["demo"]["unread_count"] == projects["demo"]["unread_counts"][participant]
+        board.search_messages(participant, "reply")
+        board.export_thread(participant, first)
+    # Opening, looking up, searching, and exporting never create acknowledgements.
+    assert board.read_thread("Barry", first)["thread"]["read_markers"] == expected_markers
+    unread = {row["id"]: row for row in board.list_threads("Fable", "demo", unread_only=True)}
+    assert unread[second]["first_unread_message_id"] == second_astra["id"]
+
+
+def test_acknowledgement_maps_share_message_snapshot(board, monkeypatch):
+    first = thread(board)
+    last = board.post_message("Fable", first, "Fable reply")
+    original = board._thread
+    changed = []
+
+    def change_after_metadata(con, thread_id, author):
+        snapshot = original(con, thread_id, author)
+        if not changed:
+            changed.append(True)
+            board.mark_read("Astra", first, last["id"])
+            board.post_message("Barry", first, "Arrived after snapshot")
+        return snapshot
+
+    monkeypatch.setattr(board, "_thread", change_after_metadata)
+    page = board.read_thread("Barry", first)
+    assert len(page["messages"]) == 2
+    assert page["thread"]["read_markers"] == {"Barry": 0, "Astra": 0, "Fable": 0}
+    assert page["thread"]["unread_counts"] == {"Barry": 2, "Astra": 1, "Fable": 1}
+    monkeypatch.setattr(board, "_thread", original)
+    fresh = board.read_thread("Barry", first)["thread"]
+    assert fresh["read_markers"] == {"Barry": 0, "Astra": last["id"], "Fable": 0}
+    assert fresh["unread_counts"] == {"Barry": 2, "Astra": 1, "Fable": 2}
+
+
+def test_participant_metadata_queries_are_batched(board, monkeypatch):
+    from contextlib import contextmanager
+    for i in range(25):
+        board.create_thread("Astra", "demo", f"Discussion {i}", "Opening")
+    original = board.connect
+    reads = []
+
+    @contextmanager
+    def traced_connect(*args, **kwargs):
+        with original(*args, **kwargs) as con:
+            con.set_trace_callback(lambda sql: reads.append(sql) if sql.lstrip().startswith(("SELECT", "WITH")) else None)
+            yield con
+
+    monkeypatch.setattr(board, "connect", traced_connect)
+    threads = board.list_threads("Fable")
+    assert len(threads) == 25 and len(reads) <= 4
+    assert all(row["unread_counts"] == {"Barry": 1, "Astra": 0, "Fable": 1} for row in threads)
+    reads.clear()
+    assert board.list_projects("Fable")[0]["unread_counts"] == {"Barry": 25, "Astra": 0, "Fable": 25}
+    assert len(reads) <= 3

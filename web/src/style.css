@@ -439,7 +439,43 @@ label > span {
   outline-offset: 7px;
 }
 .message-actions {
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.participant-counts {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-top: 6px;
+  white-space: normal;
+}
+.project-label {
+  min-width: 0;
+}
+.read-state {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+.read-state summary {
+  cursor: pointer;
+  color: var(--teal);
+}
+.read-state ul {
+  padding-left: 20px;
+}
+.quick-context {
+  margin: 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+  font-size: 14px;
+  max-height: 130px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .message {
   display: flex;

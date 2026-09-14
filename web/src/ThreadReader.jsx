@@ -8,7 +8,7 @@ import {
   Check,
 } from "lucide-react";
 import { api, post } from "./api";
-import { Composer, Message } from "./components";
+import { Composer, Message, QuickReply } from "./components";
 
 // A reader owns one contiguous window of a discussion. Navigation can replace
 // that window; paging extends it. Neither operation acknowledges any messages.
@@ -22,6 +22,7 @@ export function ThreadReader({
 }) {
   const { threadId } = route;
   const [detail, setDetail] = useState(null);
+  const [quickReply, setQuickReply] = useState(null);
   const [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false);
   const [error, setError] = useState(""),
@@ -320,6 +321,24 @@ export function ThreadReader({
               </a>
             </div>
           </header>
+          <details className="read-state">
+            <summary>Participant acknowledgements</summary>
+            <p>
+              Explicit read markers only; these do not prove attention or
+              agreement. Counts exclude each participant’s own messages.
+            </p>
+            <ul>
+              {Object.entries(thread.read_markers || {}).map(([name, id]) => (
+                <li key={name}>
+                  <strong>{name}</strong>:{" "}
+                  {id
+                    ? `acknowledged through #${id}`
+                    : "no read acknowledgement"}{" "}
+                  · {thread.unread_counts[name]} remaining
+                </li>
+              ))}
+            </ul>
+          </details>
           <nav
             className="thread-toolbar"
             ref={toolbar}
@@ -410,6 +429,9 @@ export function ThreadReader({
                   message={m}
                   messages={detail.messages}
                   onReply={setReplyTo}
+                  onQuickReply={(message, action) =>
+                    setQuickReply({ message, action })
+                  }
                   highlighted={highlight === m.id}
                   onNavigate={(id) => onNavigate({ messageId: id })}
                   onMarkRead={
@@ -453,6 +475,18 @@ export function ThreadReader({
               });
             }}
           />
+          {quickReply && (
+            <QuickReply
+              {...quickReply}
+              close={() => setQuickReply(null)}
+              onPosted={(message) => {
+                if (!mounted.current) return;
+                setQuickReply(null);
+                onNavigate({ messageId: message.id });
+                onRefresh().catch((e) => setError(e.message));
+              }}
+            />
+          )}
         </>
       ) : (
         <div className="empty-reader">

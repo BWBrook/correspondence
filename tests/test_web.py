@@ -68,3 +68,53 @@ def test_read_navigation_and_exact_message_api(client):
     unread = client.get(f"/api/threads/{thread_id}?mode=unread").json()
     assert unread["messages"] == [last]  # Barry's own intervening post is skipped.
     assert unread["thread"]["first_unread_message_id"] == last["id"]
+
+
+def test_health_reports_stable_process_snapshot(client, monkeypatch):
+    first = client.get("/api/health").json()
+    assert len(first["revision"]) == 40
+    assert isinstance(first["dirty"], bool)
+    assert first["pid"] > 0 and first["started_at"]
+    monkeypatch.setattr("correspondence.runtime.subprocess.check_output", lambda *a, **kw: "changed")
+    assert client.get("/api/health").json() == first
+
+
+def test_process_info_captures_revision_dirty_and_unavailable(tmp_path):
+    import subprocess
+    from correspondence.runtime import capture_process_info
+
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+
+    git("init", "-q")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "Initial")
+    clean = capture_process_info(tmp_path)
+    assert clean["revision"] == git("rev-parse", "HEAD") and clean["dirty"] is False
+    (tmp_path / "new.py").write_text("# new code\n")
+    assert capture_process_info(tmp_path)["dirty"] is True
+    missing = capture_process_info(tmp_path / "absent")
+    assert missing["revision"] is None and missing["dirty"] is None
+
+
+def test_access_logging_filters_only_successful_poll_requests():
+    import logging
+    from correspondence.runtime import PollAccessFilter, access_log_config
+
+    def record(method, path, status):
+        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                                 ("127.0.0.1", method, path, "1.1", status), None)
+
+    poll_filter = PollAccessFilter()
+    assert not poll_filter.filter(record("GET", "/api/projects", 200))
+    assert not poll_filter.filter(record("GET", "/api/threads?project_id=demo", 200))
+    for method, path, status in [("GET", "/api/threads", 422), ("GET", "/api/projects", 500),
+                                 ("POST", "/api/threads", 201), ("GET", "/api/threads/1", 200),
+                                 ("GET", "/api/health", 200), ("GET", "/api/threads/", 307)]:
+        assert poll_filter.filter(record(method, path, status))
+    config = access_log_config()
+    assert config["handlers"]["access"]["filters"] == ["polls"]
+    from uvicorn.logging import AccessFormatter
+    rendered = AccessFormatter(fmt=config["formatters"]["access"]["fmt"],
+                               datefmt=config["formatters"]["access"]["datefmt"], use_colors=False).format(
+                                   record("GET", "/api/health", 200))
+    assert rendered[:4].isdigit() and "T" in rendered[:20] and '"GET /api/health HTTP/1.1" 200' in rendered

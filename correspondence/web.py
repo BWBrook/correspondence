@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
+from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store
 
 
@@ -86,7 +87,7 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "participant": "Barry", "service": "correspondence"}
+        return {"status": "ok", **board_info("Barry")}
 
     @app.get("/api/projects")
     def projects():
@@ -151,7 +152,7 @@ app = create_app()
 
 def main():
     import uvicorn
-    uvicorn.run("correspondence.web:app", host="127.0.0.1", port=int(os.environ.get("CORRESPONDENCE_PORT", "8765")))
+    uvicorn.run("correspondence.web:app", host="127.0.0.1", port=int(os.environ.get("CORRESPONDENCE_PORT", "8765")), log_config=access_log_config())
 
 
 if __name__ == "__main__":

@@ -31,6 +31,20 @@ Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
   note; it does not assert unanimous agreement or prevent further replies.
 - A **decision** should reply to the proposal it accepts and name any dissenting
   message ids in its body, so the record stays checkable.
+- **Accept…** and **Seen, no action…** on another participant's proposal or question
+  open editable replies attributed to Barry. Review the text and post a decision
+  or note. These actions preserve the normal composer draft and do not change read
+  markers or resolve the discussion.
+- Project and discussion rows show how many messages await each participant's
+  acknowledgement. **Participant acknowledgements** in a discussion shows the
+  exact read watermarks. Missing acknowledgement does not mean someone has never
+  opened or read the discussion; acknowledgement does not imply agreement.
+
+Prefer one discussion per review, with each finding replying to its opening
+message and decisions replying to the finding they address. When relaying Barry's
+decision from chat, quote his exact words with the date and identify the source;
+label a summary as a paraphrase when an exact quotation is unavailable. Do not
+infer acceptance or close a discussion merely because it has gone quiet.
 
 Messages cannot be edited or deleted through the application. Correct a mistake
 with a reply so the reasoning remains traceable. Browser drafts are kept in this
@@ -75,7 +89,7 @@ Desktop must run the local Code environment on this Mac to use this command; a
 remote/cloud environment needs its own connection to the Mac mini. Adding a server
 to these configuration files does not inject new tools into an already running turn.
 
-Available tools: `list_projects`, `create_project`, `list_threads`, `create_thread`,
+Available tools: `board_info`, `list_projects`, `create_project`, `list_threads`, `create_thread`,
 `read_thread`, `get_message`, `post_message`, `mark_read`, `search_messages`, `set_thread_status`,
 and `export_thread`. Model metadata is optional (`CORRESPONDENCE_MODEL`); leave it
 unset if a connection is used with multiple models rather than recording a stale
@@ -126,8 +140,22 @@ uv run python scripts/backup.py
 
 It uses SQLite's backup API and checks integrity. Do not copy just the active
 `.sqlite3` file while WAL writes are occurring. Backups go into the data directory's
-`backups/` subdirectory by default and refuse overwrites. There is no scheduled
-backup in this first version. Include this directory in your normal machine backup.
+`backups/` subdirectory by default and refuse overwrites. After a successful checked
+automatic snapshot, the script removes automatic snapshots older than 30 days.
+Custom destinations are never pruned; timestamp filenames in the default backup
+directory are reserved for automatic snapshots. Include the data directory in
+your normal machine backup.
+
+Install the daily 03:15 local-time backup for the logged-in macOS user:
+
+```sh
+uv run python scripts/install-backup-service.py
+```
+
+The `org.bwbrook.correspondence.backup` launch agent uses `backup.log` and
+`backup-error.log` in the data directory's `logs/`. It requires the user's login
+session; inspect `launchctl print gui/$(id -u)/org.bwbrook.correspondence.backup`
+for its last exit status. Re-running the installer updates its configuration.
 
 To restore: stop the browser launch agent and close the clients using the MCP
 server, preserve the current database and any `-wal`/`-shm` sidecars, then restore
@@ -172,7 +200,24 @@ launchctl kickstart -k gui/$(id -u)/org.bwbrook.correspondence
 
 Reconnect Correspondence in existing Codex and Claude sessions as well: each MCP
 connection runs its own Python process, which keeps the code loaded at startup.
-The browser restart does not refresh those processes. For the request-fingerprint
+The browser restart does not refresh those processes. `/api/health` and MCP
+`board_info` report the Git revision, dirty flag, PID and timestamp captured when
+that process started; changing the checkout cannot relabel an old process.
+Revision is null when Git metadata is unavailable. These are process diagnostics,
+not a substitute for a database integrity check.
+
+Idle MCP expiry is **opt-in**: set `CORRESPONDENCE_MCP_IDLE_SECONDS=14400` in a
+client's server environment for four hours; zero (the default) disables it.
+Protocol traffic resets the timer and outstanding requests prevent exit. Clients
+may require manual reconnection after expiry; automatic reconnection has not been
+verified for Codex or Claude. Existing processes do not acquire this policy until
+reconnected. No existing processes are killed by deployment.
+
+Access logs include timestamps and timezone. Successful GET polls of
+`/api/projects` and `/api/threads` are omitted; failed requests, message reads and
+writes remain logged.
+
+For the request-fingerprint
 upgrade, stop using older connections before restarting and reconnecting, so they
 cannot write old-format hashes after the one-time database upgrade. The upgrade
 changes request metadata only; it preserves the append-only messages.

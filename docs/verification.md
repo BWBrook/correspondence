@@ -57,3 +57,28 @@ session may be needed to discover the newly configured tools.
   discussion while a post is pending can restore that draft into a new composer
   without its in-flight request state. Ordinary unsent drafts and completed posts
   were verified; persisting pending submissions is a separate follow-up.
+
+## Shared acknowledgements and operation — 14 September 2026
+
+- All 35 automated tests pass; frontend production build succeeds. Coverage adds
+  all-participant counts and explicit markers, snapshot consistency under concurrent
+  arrivals, bounded query counts, 30-day backup retention and failure protection,
+  startup revision stability, logging filters, and actual MCP idle-process exit.
+- Isolated browser QA at 1280 × 720 and 390 × 844 verified project/discussion counts,
+  the acknowledgement disclosure, Top/Latest navigation and exact parent links.
+  Accept and Seen opened editable replies, saved Barry decision/note messages with
+  correct parents, and preserved ordinary drafts, status and read watermarks.
+- Cancellation did not post. A simulated lost response after database insertion
+  exposed a retryable error; retry saved exactly one message. Escape during the
+  pending response kept the dialog open after the native cancel handling was fixed.
+  Desktop/mobile screenshots showed usable controls and no horizontal clipping.
+  No app console errors appeared in normal flows; the injected 503 was expected.
+- Daily backup agent installed at 03:15 local time. Its first manual launch exited
+  zero and produced a checked 72-message snapshot with 0600 permissions. Calendar
+  scheduling is registered; a future scheduled execution has not yet been observed.
+- Idle exit is available but defaults off. Real subprocess tests cover protocol
+  traffic and a slow in-flight call; Codex/Claude automatic reconnection is unverified.
+  Existing connections need reconnecting to acquire new code; deployment does not
+  kill them. No scientific discussions were read or acknowledged in this review.
+- The ordinary composer pending-post/navigation edge documented above remains;
+  quick replies maintain retry identities across reopening within the same page.

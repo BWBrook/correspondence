@@ -9,7 +9,7 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { api } from "./api";
-import { CreateForm } from "./components";
+import { CreateForm, UnreadCounts } from "./components";
 import { ThreadReader } from "./ThreadReader";
 import "./style.css";
 
@@ -159,7 +159,10 @@ function App() {
               className={`project ${p.id === projectId ? "selected" : ""}`}
               onClick={() => selectProject(p.id)}
             >
-              <span>{p.name}</span>
+              <span className="project-label">
+                {p.name}
+                <UnreadCounts counts={p.unread_counts} />
+              </span>
               {p.unread_count > 0 && (
                 <span
                   className="unread-count"
@@ -279,6 +282,7 @@ function App() {
                   {t.message_count === 1 ? "message" : "messages"}
                   {t.status === "resolved" ? " · Resolved" : ""}
                 </p>
+                <UnreadCounts counts={t.unread_counts} />
               </button>
             ))
           ) : (

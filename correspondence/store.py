@@ -163,19 +163,45 @@ class Store:
         return cursor.lastrowid
 
     @staticmethod
+    def _thread_records(con, threads, author):
+        """Batch explicit acknowledgement metadata within the caller's snapshot."""
+        if not threads:
+            return []
+        records = {thread["id"]: dict(thread, read_markers={name: 0 for name in ("Barry", "Astra", "Fable")},
+                                      unread_counts={name: 0 for name in ("Barry", "Astra", "Fable")},
+                                      message_count=0, first_message_id=None, last_message_id=None,
+                                      first_unread_message_id=None, last_author=None) for thread in threads}
+        placeholders = ",".join("?" for _ in records)
+        stats = con.execute(f"""WITH participants(author) AS (VALUES ('Barry'),('Astra'),('Fable'))
+            SELECT m.thread_id, p.author participant, COALESCE(r.message_id,0) marker,
+                COUNT(*) message_count, MIN(m.id) first_message_id, MAX(m.id) last_message_id,
+                SUM(m.id>COALESCE(r.message_id,0) AND m.author!=p.author) unread_count,
+                MIN(CASE WHEN m.id>COALESCE(r.message_id,0) AND m.author!=p.author THEN m.id END) first_unread_message_id
+            FROM messages m CROSS JOIN participants p
+            LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=p.author
+            WHERE m.thread_id IN ({placeholders}) GROUP BY m.thread_id,p.author""", tuple(records))
+        for row in stats:
+            record = records[row["thread_id"]]
+            participant = row["participant"]
+            record["read_markers"][participant] = row["marker"]
+            record["unread_counts"][participant] = row["unread_count"]
+            if participant == author:
+                for field in ("message_count", "first_message_id", "last_message_id", "first_unread_message_id"):
+                    record[field] = row[field]
+        last_ids = [record["last_message_id"] for record in records.values() if record["last_message_id"] is not None]
+        last_authors = {}
+        if last_ids:
+            last_authors = dict(con.execute(f"SELECT id,author FROM messages WHERE id IN ({','.join('?' for _ in last_ids)})", last_ids))
+        for record in records.values():
+            record["last_author"] = last_authors.get(record["last_message_id"])
+            record["unread_count"] = record["unread_counts"][author]
+            record["last_read_message_id"] = record["read_markers"][author]
+        return list(records.values())
+
+    @staticmethod
     def _thread(con, thread_id, author):
         thread = Store._require(con, "threads", thread_id)
-        marker = con.execute("SELECT message_id FROM read_markers WHERE thread_id=? AND author=?", (thread_id, author)).fetchone()
-        last_read = marker[0] if marker else 0
-        stats = con.execute("""SELECT COUNT(*) message_count, MIN(id) first_message_id,
-            MAX(id) last_message_id, COALESCE(SUM(id>? AND author!=?),0) unread_count,
-            MIN(CASE WHEN id>? AND author!=? THEN id END) first_unread_message_id
-            FROM messages WHERE thread_id=?""", (last_read, author, last_read, author, thread_id)).fetchone()
-        thread.update(dict(stats))
-        last = con.execute("SELECT author FROM messages WHERE thread_id=? ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
-        thread["last_author"] = last[0] if last else None
-        thread["last_read_message_id"] = last_read
-        return thread
+        return Store._thread_records(con, [thread], author)[0]
 
     def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None):
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", id) or len(id) > 100:
@@ -197,22 +223,35 @@ class Store:
     def list_projects(self, author):
         author_name(author)
         with self.connect() as con:
-            return [dict(row) for row in con.execute("""SELECT p.*, (SELECT COUNT(*) FROM messages m
-                JOIN threads t ON t.id=m.thread_id LEFT JOIN read_markers r ON r.thread_id=t.id AND r.author=?
-                WHERE t.project_id=p.id AND m.id>COALESCE(r.message_id,0) AND m.author!=?) unread_count
-                FROM projects p ORDER BY p.name COLLATE NOCASE LIMIT 1000""", (author, author))]
+            projects = [dict(row, unread_counts={name: 0 for name in ("Barry", "Astra", "Fable")})
+                        for row in con.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE LIMIT 1000")]
+            if not projects:
+                return []
+            by_id = {project["id"]: project for project in projects}
+            placeholders = ",".join("?" for _ in projects)
+            counts = con.execute(f"""WITH participants(author) AS (VALUES ('Barry'),('Astra'),('Fable'))
+                SELECT t.project_id,p.author participant,COUNT(*) unread_count
+                FROM messages m JOIN threads t ON t.id=m.thread_id CROSS JOIN participants p
+                LEFT JOIN read_markers r ON r.thread_id=t.id AND r.author=p.author
+                WHERE t.project_id IN ({placeholders}) AND m.id>COALESCE(r.message_id,0) AND m.author!=p.author
+                GROUP BY t.project_id,p.author""", tuple(by_id))
+            for row in counts:
+                by_id[row["project_id"]]["unread_counts"][row["participant"]] = row["unread_count"]
+            for project in projects:
+                project["unread_count"] = project["unread_counts"][author]
+            return projects
 
     def list_threads(self, author, project_id=None, unread_only=False, limit=200):
         author_name(author)
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
         with self.connect() as con:
-            rows = con.execute("""SELECT t.id FROM threads t WHERE (? IS NULL OR t.project_id=?)
+            rows = con.execute("""SELECT t.* FROM threads t WHERE (? IS NULL OR t.project_id=?)
                 AND (?=0 OR EXISTS (SELECT 1 FROM messages m LEFT JOIN read_markers r
                 ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author!=?
                 AND m.id>COALESCE(r.message_id,0))) ORDER BY t.updated_at DESC, t.id DESC LIMIT ?""",
                 (project_id, project_id, unread_only, author, author, limit)).fetchall()
-            return [self._thread(con, row[0], author) for row in rows]
+            return self._thread_records(con, [dict(row) for row in rows], author)
 
     def create_thread(self, author, project_id, title, body, kind="note", model=None, request_id=None):
         title = clean_text(title, "title", 300)
