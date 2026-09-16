@@ -356,18 +356,23 @@ class Store:
                 self._insert_message(con, thread_id, author, model, f"Discussion status changed from {thread['status']} to {status}.", "note")
             return self._thread(con, thread_id, author)
 
-    def search_messages(self, author, q, project_id=None, limit=100):
+    def search_messages(self, author, q, project_id=None, limit=100, *, thread_id=None, before=None):
         author_name(author)
         q = clean_text(q, "q", 500)
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
+        for name, value in (("thread_id", thread_id), ("before", before)):
+            if value is not None and (type(value) is not int or not 1 <= value <= 2**63 - 1):
+                raise ValueError(f"{name} must be a positive SQLite integer id")
         pattern = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         with self.connect() as con:
             rows = con.execute("""SELECT m.id, m.thread_id, m.author, m.model, m.kind, m.parent_id, m.created_at, m.body,
                 t.title thread_title, t.project_id, p.name project_name
                 FROM messages m JOIN threads t ON m.thread_id=t.id JOIN projects p ON t.project_id=p.id
                 WHERE (m.body LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\')
-                AND (? IS NULL OR t.project_id=?) ORDER BY m.id DESC LIMIT ?""", (pattern,pattern,project_id,project_id,limit))
+                AND (? IS NULL OR t.project_id=?) AND (? IS NULL OR m.thread_id=?)
+                AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
+                (pattern,pattern,project_id,project_id,thread_id,thread_id,before,before,limit))
             return [self._snippet(dict(row), q) for row in rows]
 
     @staticmethod

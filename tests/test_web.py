@@ -118,3 +118,24 @@ def test_access_logging_filters_only_successful_poll_requests():
                                datefmt=config["formatters"]["access"]["datefmt"], use_colors=False).format(
                                    record("GET", "/api/health", 200))
     assert rendered[:4].isdigit() and "T" in rendered[:20] and '"GET /api/health HTTP/1.1" 200' in rendered
+
+
+def test_search_endpoint_scope_cursor_and_validation(client):
+    board = client.app.state.store
+    board.create_project("search", "Search")
+    board.create_project("other", "Other")
+    first = board.create_thread("Astra", "search", "One", "Match old")["id"]
+    second = board.create_thread("Fable", "other", "Two", "Match elsewhere")["id"]
+    latest = board.post_message("Fable", first, "Match recent")
+    response = client.get("/api/search", params={"q": "match", "thread_id": first, "limit": 1})
+    assert response.status_code == 200
+    assert [m["id"] for m in response.json()] == [latest["id"]]
+    older = client.get("/api/search", params={"q": "match", "project_id": "search", "thread_id": first, "before": latest["id"]}).json()
+    assert len(older) == 1 and older[0]["thread_id"] == first
+    assert len(client.get("/api/search?q=match").json()) == 3
+    assert client.get("/api/search", params={"q": "match", "project_id": "search", "thread_id": second}).json() == []
+    assert client.get("/api/search?q=match&thread_id=999999").json() == []
+    for field in ("thread_id", "before"):
+        for value in (0, -1, "abc", 2**63):
+            assert client.get("/api/search", params={"q": "match", field: value}).status_code == 422
+    assert board.read_thread("Barry", first)["thread"]["last_read_message_id"] == 0

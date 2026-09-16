@@ -343,3 +343,51 @@ def test_participant_metadata_queries_are_batched(board, monkeypatch):
     reads.clear()
     assert board.list_projects("Fable")[0]["unread_counts"] == {"Barry": 25, "Astra": 0, "Fable": 25}
     assert len(reads) <= 3
+
+
+def test_search_scopes_and_cursor_preserve_interleaved_matches(board):
+    board.create_project("other", "Other")
+    threads = [board.create_thread("Astra", project, title, "Opening")["id"]
+               for project, title in [("demo", "First"), ("other", "Second"), ("demo", "Third")]]
+    matches = []
+    for i in range(17):
+        message = board.post_message("Fable", threads[i % 3], f"Needle match {i}")
+        matches.append(message)
+        board.post_message("Barry", threads[(i + 1) % 3], "Nonmatching interleaved message")
+    board.mark_read("Astra", threads[0], matches[0]["id"])
+    before_metadata = board.list_threads("Astra")
+    cases = [({}, matches),
+             ({"project_id": "demo"}, [m for m in matches if m["thread_id"] != threads[1]]),
+             ({"thread_id": threads[0]}, [m for m in matches if m["thread_id"] == threads[0]]),
+             ({"project_id": "demo", "thread_id": threads[0]}, [m for m in matches if m["thread_id"] == threads[0]]),
+             ({"project_id": "other", "thread_id": threads[0]}, []),
+             ({"thread_id": 999999}, [])]
+    for scope, expected in cases:
+        cursor, found = None, []
+        while True:
+            page = board.search_messages("Astra", "needle", limit=3, before=cursor, **scope)
+            if not page:
+                break
+            assert all("body" not in hit and "Needle" in hit["snippet"] for hit in page)
+            found.extend(hit["id"] for hit in page)
+            previous_cursor, cursor = cursor, page[-1]["id"]
+            assert previous_cursor is None or cursor < previous_cursor
+        assert found == [m["id"] for m in reversed(expected)]
+    # Existing positional project/limit arguments retain their meaning.
+    assert len(board.search_messages("Astra", "needle", "demo", 2)) == 2
+    assert board.search_messages("Astra", "needle", before=1) == []
+    assert board.list_threads("Astra") == before_metadata
+
+
+def test_search_literal_filters_title_matches_and_validation(board):
+    first = board.create_thread("Astra", "demo", r"Literal %_\ title", "Title match only")["id"]
+    second = board.create_thread("Fable", "demo", "Ordinary", "Unrelated")["id"]
+    special = board.post_message("Barry", second, r"literal %_\ body")
+    board.post_message("Barry", second, "literal XX body")
+    for q in ("%", "_", "\\", "%_\\"):
+        assert [hit["id"] for hit in board.search_messages("Fable", q, thread_id=second)] == [special["id"]]
+        assert len(board.search_messages("Fable", q, thread_id=first)) == 1
+    for field in ("thread_id", "before"):
+        for value in (0, -1, True, 1.5, "1", 2**63):
+            with pytest.raises(ValueError, match=field):
+                board.search_messages("Fable", "literal", **{field: value})

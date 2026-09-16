@@ -11,6 +11,7 @@ import {
 import { api } from "./api";
 import { CreateForm, UnreadCounts } from "./components";
 import { ThreadReader } from "./ThreadReader";
+import { SearchDialog } from "./SearchDialog";
 import "./style.css";
 
 function routeFromHash() {
@@ -30,9 +31,7 @@ function App() {
     [route, setRoute] = useState(routeFromHash);
   const threadId = route.threadId;
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const [query, setQuery] = useState(""),
-    [results, setResults] = useState(null),
-    [searching, setSearching] = useState(false);
+  const [searchScope, setSearchScope] = useState(null);
   const [modal, setModal] = useState(null),
     [error, setError] = useState("");
   const currentProject = useRef(projectId),
@@ -88,32 +87,6 @@ function App() {
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    setResults(null);
-    if (!query.trim()) {
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(() => {
-      api(
-        `/search?q=${encodeURIComponent(query)}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`,
-        { signal: controller.signal },
-      )
-        .then(setResults)
-        .catch((e) => {
-          if (e.name !== "AbortError") setError(e.message);
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setSearching(false);
-        });
-    }, 250);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query, projectId]);
   function navigate(id, { messageId = null, mode = "oldest" } = {}) {
     const params = new URLSearchParams({ thread: id });
     if (messageId) params.set("message", messageId);
@@ -121,7 +94,6 @@ function App() {
     const hash = `#${params}`;
     if (location.hash !== hash) history.pushState(null, "", hash);
     setRoute({ threadId: id, messageId, mode });
-    setQuery("");
   }
   function selectThread(id) {
     navigate(id);
@@ -129,13 +101,11 @@ function App() {
   function selectProject(id) {
     setProjectId(id);
     setRoute({ threadId: null, messageId: null, mode: "oldest" });
-    setQuery("");
     history.pushState(null, "", location.pathname);
   }
   function created(result) {
     const type = modal;
     setModal(null);
-    setQuery("");
     setUnreadOnly(false);
     if (type === "project") {
       refreshProjects().catch((e) => setError(e.message));
@@ -153,6 +123,12 @@ function App() {
         </a>
         <nav aria-label="Projects">
           <h2>Projects</h2>
+          <button
+            className="text-button board-search"
+            onClick={() => setSearchScope("all")}
+          >
+            <Search size={17} /> Search board
+          </button>
           {projects.map((p) => (
             <button
               key={p.id}
@@ -196,15 +172,13 @@ function App() {
             {project?.description ||
               "A shared space for Barry, Astra and Fable."}
           </p>
-          <label className="search">
-            <Search size={18} />
-            <input
-              aria-label="Search correspondence"
-              placeholder="Search correspondence"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
+          <button
+            className="outline search-launch"
+            onClick={() => setSearchScope("project")}
+            disabled={!project}
+          >
+            <Search size={18} /> Search this project
+          </button>
           <div className="tabs">
             <button
               className={!unreadOnly ? "active" : ""}
@@ -243,30 +217,7 @@ function App() {
           </p>
         )}
         <div className="thread-list">
-          {query.trim() ? (
-            <>
-              <p className="list-note">
-                {searching
-                  ? "Searching…"
-                  : `${results?.length || 0} matching ${results?.length === 1 ? "message" : "messages"}`}
-              </p>
-              {results?.map((m) => (
-                <button
-                  className="thread-row search-result"
-                  key={m.id}
-                  onClick={() => {
-                    navigate(m.thread_id, { messageId: m.id });
-                  }}
-                >
-                  <h3>{m.thread_title}</h3>
-                  <p>
-                    {m.author} · {m.kind}
-                  </p>
-                  <div>{m.snippet}</div>
-                </button>
-              ))}
-            </>
-          ) : threads.length ? (
+          {threads.length ? (
             threads.map((t) => (
               <button
                 className={`thread-row ${t.id === threadId ? "selected" : ""}`}
@@ -309,6 +260,7 @@ function App() {
           onProject={setProjectId}
           onBack={() => selectProject(projectId)}
           onRefresh={refreshCounts}
+          onSearch={() => setSearchScope("thread")}
         />
       ) : (
         <main className="reader">
@@ -325,6 +277,19 @@ function App() {
             )}
           </div>
         </main>
+      )}
+      {searchScope && (
+        <SearchDialog
+          initialScope={searchScope}
+          project={project}
+          threadId={threadId}
+          close={() => setSearchScope(null)}
+          onSelect={(message) => {
+            setSearchScope(null);
+            setProjectId(message.project_id);
+            navigate(message.thread_id, { messageId: message.id });
+          }}
+        />
       )}
       {modal && (
         <CreateForm

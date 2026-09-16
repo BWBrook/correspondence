@@ -126,8 +126,8 @@ def create_app(data_dir=None, dist_dir=None):
         return store().set_thread_status("Barry", thread_id, payload.status)
 
     @app.get("/api/search")
-    def search(q: str, project_id: str | None = None, limit: int = Query(100, ge=1, le=500)):
-        return store().search_messages("Barry", q, project_id, limit)
+    def search(q: str, project_id: str | None = None, limit: int = Query(100, ge=1, le=500), thread_id: int | None = Query(None, ge=1), before: int | None = Query(None, ge=1)):
+        return store().search_messages("Barry", q, project_id, limit, thread_id=thread_id, before=before)
 
     @app.get("/api/threads/{thread_id}/export", response_class=PlainTextResponse)
     def export(thread_id: int):

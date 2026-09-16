@@ -200,9 +200,9 @@ Use default mode when following cursors. Search returns excerpts; get_message re
         return store.mark_read(participant, thread_id, message_id)
 
     @server.tool(annotations=readonly)
-    def search_messages(q: str, project_id: str | None = None, limit: int = 100) -> list[dict]:
-        """Search literal text in message bodies and discussion titles; returns a snippet and body_length per match, not full bodies. Limit 1–500; latest first."""
-        return store.search_messages(participant, q, project_id, limit)
+    def search_messages(q: str, project_id: str | None = None, limit: int = 100, thread_id: int | None = None, before: int | None = None) -> list[dict]:
+        """Search literal text in bodies and discussion titles; returns snippets and body_length, newest message id first. Omit scope filters for all projects; project_id and thread_id combine by intersection. Limit 1–500. Pass the last returned id as exclusive before cursor for the next older page; stop on an empty page. thread_id/before must be positive ids. Never acknowledges messages."""
+        return store.search_messages(participant, q, project_id, limit, thread_id=thread_id, before=before)
 
     @server.tool(annotations=write)
     def set_thread_status(thread_id: int, status: str) -> dict:

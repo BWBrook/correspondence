@@ -6,6 +6,7 @@ import {
   Download,
   RefreshCw,
   Check,
+  Search,
 } from "lucide-react";
 import { api, post } from "./api";
 import { Composer, Message, QuickReply } from "./components";
@@ -18,6 +19,7 @@ export function ThreadReader({
   onNavigate,
   onProject,
   onBack,
+  onSearch,
   onRefresh,
 }) {
   const { threadId } = route;
@@ -304,6 +306,9 @@ export function ThreadReader({
             </button>
             <h2 tabIndex={-1}>{thread.title}</h2>
             <div className="reader-actions">
+              <button className="text-button" onClick={onSearch}>
+                <Search size={16} /> Search
+              </button>
               <button
                 className="text-button status-toggle"
                 disabled={locked}

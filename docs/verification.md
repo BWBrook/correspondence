@@ -82,3 +82,22 @@ session may be needed to discover the newly configured tools.
   kill them. No scientific discussions were read or acknowledged in this review.
 - The ordinary composer pending-post/navigation edge documented above remains;
   quick replies maintain retry identities across reopening within the same page.
+
+## Scoped search — 16 September 2026
+
+- All 38 automated tests pass. Store, HTTP and actual MCP transport checks cover
+  project/thread filter intersection, exclusive before-ID pagination across
+  interleaved messages, literal special characters, invalid IDs and unchanged
+  acknowledgement state. Search remains a bounded snippet list with no schema change.
+- Isolated Chrome QA used two projects, three discussions and 108 matching messages.
+  Whole-board search loaded 100 then eight older results; a cross-project result
+  selected its project and opened the exact message. Discussion and project scopes,
+  empty results, existing drafts and explicit-read state were checked.
+- Desktop and 390 × 844 layouts rendered usable search controls. Mobile had no
+  horizontal page overflow. Normal browser console had no warnings/errors. The
+  search input receives initial focus and Escape dismisses the dialog.
+- Review caught a discussion scope surviving browser Back after its discussion
+  disappears. Unavailable scopes now fall back to whole-board search; the browser
+  check confirmed this transition. Project search waits for project metadata.
+- In-app browser was unavailable in this session; validation used an isolated tab
+  in the connected Chrome browser. The user's existing board tab was not changed.

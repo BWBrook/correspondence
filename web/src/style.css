@@ -217,23 +217,40 @@ label > span {
   color: var(--muted);
   margin-bottom: 26px;
 }
-.search {
-  display: flex;
-  align-items: center;
-  position: relative;
-  font-weight: 400;
+.search-launch {
+  width: 100%;
+  justify-content: flex-start;
 }
-.search svg {
-  position: absolute;
-  left: 12px;
+.board-search {
+  margin: 0 12px 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.search-dialog {
+  display: grid;
+  gap: 14px;
+}
+.search-dialog select {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+}
+.search-hint,
+.search-status {
   color: var(--muted);
-  pointer-events: none;
-}
-.search input {
+  font-size: 12px;
+  line-height: 1.6;
   margin: 0;
-  padding-left: 37px;
-  font-size: 14px;
-  height: 43px;
+}
+.search-results {
+  min-width: 0;
+}
+.search-results .thread-row {
+  padding: 18px 10px;
+}
+.search-project {
+  color: var(--teal);
+  font-size: 12px;
 }
 .tabs {
   display: flex;

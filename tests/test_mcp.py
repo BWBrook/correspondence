@@ -63,6 +63,13 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
         unread = await session.call_tool("read_thread", {"thread_id": 1, "mode": "unread"})
         assert json.loads(unread.content[0].text)["messages"][0] == message
         assert (await session.call_tool("read_thread", {"thread_id": 1, "mode": "latest", "after": 1})).isError
+        search = await session.call_tool("search_messages", {"q": "e", "thread_id": 1, "before": latest_data["messages"][0]["id"], "limit": 1})
+        assert not search.isError
+        assert json.loads(search.content[0].text)["id"] == message["id"]
+        mismatch = await session.call_tool("search_messages", {"q": "e", "project_id": "missing", "thread_id": 1})
+        assert not mismatch.isError and mismatch.content == []
+        assert (await session.call_tool("search_messages", {"q": "e", "thread_id": 0})).isError
+        assert (await session.call_tool("search_messages", {"q": "e", "before": -1})).isError
         assert not (await session.call_tool("mark_read", {"thread_id": 1, "message_id": message["id"]})).isError
 
     asyncio.run(session_as("Astra", "GPT-6 Astra", astra))
