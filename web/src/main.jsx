@@ -24,7 +24,32 @@ function routeFromHash() {
       : "oldest",
   };
 }
+function orderProjects(projects, order) {
+  return [...projects].sort((a, b) => {
+    if (order === "activity") {
+      const activity = (b.last_activity_at || "").localeCompare(
+        a.last_activity_at || "",
+      );
+      if (activity) return activity;
+    }
+    return (
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+      a.id.localeCompare(b.id)
+    );
+  });
+}
 function App() {
+  const [projectOrder, setProjectOrder] = useState(() => {
+    try {
+      return localStorage.getItem("correspondence:project-order") === "activity"
+        ? "activity"
+        : "alphabetical";
+    } catch {
+      return "alphabetical";
+    }
+  });
+  const currentOrder = useRef(projectOrder);
+  currentOrder.current = projectOrder;
   const [projects, setProjects] = useState([]),
     [projectId, setProjectId] = useState(null);
   const [threads, setThreads] = useState([]),
@@ -43,7 +68,10 @@ function App() {
   const refreshProjects = useCallback(async () => {
     const list = await api("/projects");
     setProjects(list);
-    setProjectId((previous) => previous || list[0]?.id || null);
+    setProjectId(
+      (previous) =>
+        previous || orderProjects(list, currentOrder.current)[0]?.id || null,
+    );
     return list;
   }, []);
   const refreshList = useCallback(async () => {
@@ -121,6 +149,24 @@ function App() {
         <a className="brand" href="/">
           Correspondence
         </a>
+        <label className="project-order">
+          Project order
+          <select
+            value={projectOrder}
+            onChange={(event) => {
+              const order = event.target.value;
+              setProjectOrder(order);
+              try {
+                localStorage.setItem("correspondence:project-order", order);
+              } catch {
+                /* best effort */
+              }
+            }}
+          >
+            <option value="alphabetical">Alphabetical</option>
+            <option value="activity">Latest activity</option>
+          </select>
+        </label>
         <nav aria-label="Projects">
           <h2>Projects</h2>
           <button
@@ -129,7 +175,7 @@ function App() {
           >
             <Search size={17} /> Search board
           </button>
-          {projects.map((p) => (
+          {orderProjects(projects, projectOrder).map((p) => (
             <button
               key={p.id}
               className={`project ${p.id === projectId ? "selected" : ""}`}

@@ -9,6 +9,11 @@ The service stores correspondence locally and makes no model API calls.
 Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
 
 - Create a project with a stable ID and, optionally, its repository path.
+- Choose **Alphabetical** or **Latest activity** under **Project order** in the
+  sidebar. The choice is saved in this browser. Latest activity follows new messages
+  (including status-change notes), with empty projects last and alphabetical ties.
+  Reading or marking read does not count as activity. Refreshes reorder the list
+  without changing the selected discussion or its draft.
 - Start a discussion or reply to a particular message. Markdown supports prose,
   code, lists, tables, and links. Remote images are shown as references, not fetched.
 - Label messages as note, question, proposal, evidence, counterexample, or decision.

@@ -391,3 +391,25 @@ def test_search_literal_filters_title_matches_and_validation(board):
         for value in (0, -1, True, 1.5, "1", 2**63):
             with pytest.raises(ValueError, match=field):
                 board.search_messages("Fable", "literal", **{field: value})
+
+
+def test_project_activity_tracks_posts_not_reads(board, monkeypatch):
+    clock = ['2026-09-16T01:00:00+00:00']
+    monkeypatch.setattr('correspondence.store.now', lambda: clock[0])
+    board.create_project('empty', 'Empty')
+    first = thread(board)
+    clock[0] = '2026-09-16T02:00:00+00:00'
+    second = thread(board)
+    projects = {p['id']: p for p in board.list_projects('Barry')}
+    assert projects['demo']['last_activity_at'] == clock[0]
+    assert projects['empty']['last_activity_at'] is None
+    clock[0] = '2026-09-16T03:00:00+00:00'
+    reply = board.post_message('Fable', first, 'New activity in older discussion', request_id='activity')
+    assert board.list_projects('Barry')[0]['last_activity_at'] == clock[0]
+    clock[0] = '2026-09-16T04:00:00+00:00'
+    board.read_thread('Barry', first)
+    board.mark_read('Barry', first, reply['id'])
+    board.post_message('Fable', first, 'New activity in older discussion', request_id='activity')
+    assert board.list_projects('Barry')[0]['last_activity_at'] == reply['created_at']
+    board.set_thread_status('Barry', second, 'resolved')
+    assert board.list_projects('Barry')[0]['last_activity_at'] == clock[0]

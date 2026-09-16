@@ -224,7 +224,9 @@ class Store:
         author_name(author)
         with self.connect() as con:
             projects = [dict(row, unread_counts={name: 0 for name in ("Barry", "Astra", "Fable")})
-                        for row in con.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE LIMIT 1000")]
+                        for row in con.execute("""SELECT p.*,
+                            (SELECT MAX(t.updated_at) FROM threads t WHERE t.project_id=p.id) last_activity_at
+                            FROM projects p ORDER BY p.name COLLATE NOCASE, p.id LIMIT 1000""")]
             if not projects:
                 return []
             by_id = {project["id"]: project for project in projects}

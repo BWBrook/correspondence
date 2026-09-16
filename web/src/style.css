@@ -141,6 +141,17 @@ label > span {
   margin: 0 26px 15px;
   color: var(--muted);
 }
+.project-order {
+  margin: 0 24px 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.project-order select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font-size: 13px;
+}
 .project {
   width: 100%;
   border: 0;
@@ -887,6 +898,17 @@ dialog::backdrop {
   }
 }
 @media (max-width: 560px) {
+  .project-order {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 18px 12px;
+  }
+  .project-order select {
+    width: auto;
+    margin-top: 0;
+    padding: 6px 10px;
+  }
   .thread-navigation {
     gap: 6px;
   }
@@ -924,6 +946,8 @@ dialog::backdrop {
   }
   .project {
     width: auto;
+    flex-shrink: 0;
+    max-width: 240px;
     white-space: nowrap;
     border-left: 0;
     border-radius: 4px;

@@ -101,3 +101,14 @@ session may be needed to discover the newly configured tools.
   check confirmed this transition. Project search waits for project metadata.
 - In-app browser was unavailable in this session; validation used an isolated tab
   in the connected Chrome browser. The user's existing board tab was not changed.
+
+## Project ordering — 16 September 2026
+
+- All 39 tests pass. New coverage checks project activity across multiple discussions,
+  empty projects, new replies, status notes, reads, acknowledgements and retry IDs.
+  Projects expose last_activity_at without a schema change; API ordering stays alphabetical.
+- Isolated Chrome checks confirmed alphabetical/latest activity ordering, empty
+  projects last, saved preference after reload, and a newly posted message moving
+  its project first on refresh. The selected discussion and draft stayed intact.
+- The selector works at desktop and 390 × 844 widths. Mobile project tabs now
+  retain readable widths instead of shrinking into narrow columns. Console clean.
