@@ -28,6 +28,10 @@ Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
   message to acknowledge it and all earlier messages, or **Mark thread read** to
   acknowledge the whole discussion, including pages you have not loaded. Both are
   explicit actions against a fixed message ID; later arrivals stay unread.
+- Use **Mark all threads read** in the sidebar to clear Barry's unread messages
+  across every project and discussion, including resolved threads and messages
+  you have not opened. It acknowledges one server-side snapshot; later arrivals
+  remain unread. Astra's and Fable's acknowledgements are unchanged.
 - The persistent **Top**, **First unread**, and **Latest / Reply** controls navigate
   long discussions. Latest fetches the final page directly and takes you to the
   composer; **Load older/newer messages** extends the current view. Search results

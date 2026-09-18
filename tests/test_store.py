@@ -413,3 +413,90 @@ def test_project_activity_tracks_posts_not_reads(board, monkeypatch):
     assert board.list_projects('Barry')[0]['last_activity_at'] == reply['created_at']
     board.set_thread_status('Barry', second, 'resolved')
     assert board.list_projects('Barry')[0]['last_activity_at'] == clock[0]
+
+
+def test_mark_all_read_covers_projects_resolved_and_own_posts(board):
+    board.create_project("other", "Other")
+    first = board.create_thread("Astra", "demo", "First", "Opening")["id"]
+    board.post_message("Barry", first, "My reply")
+    own_only = board.create_thread("Barry", "demo", "Own", "My opening")["id"]
+    resolved = board.create_thread("Fable", "other", "Resolved", "Other project")["id"]
+    board.set_thread_status("Astra", resolved, "resolved")
+    first_last = board.read_thread("Barry", first)["thread"]["last_message_id"]
+    board.mark_read("Astra", first, first_last)
+    board.mark_read("Fable", first, first_last)
+    before_threads = board.list_threads("Barry")
+    with board.connect() as con:
+        messages_before = [tuple(row) for row in con.execute("SELECT * FROM messages ORDER BY id")]
+        activity_before = [tuple(row) for row in con.execute("SELECT * FROM threads ORDER BY id")]
+        other_markers_before = [tuple(row) for row in con.execute("SELECT * FROM read_markers WHERE author!='Barry' ORDER BY author,thread_id")]
+    assert board.mark_all_read("Barry") == {"threads_marked": 2, "messages_marked": 3}
+    for snapshot in before_threads:
+        current = board.read_thread("Barry", snapshot["id"])["thread"]
+        assert current["last_read_message_id"] == snapshot["last_message_id"]
+        assert current["unread_count"] == 0
+    assert board.read_thread("Barry", own_only)["thread"]["last_read_message_id"] > 0
+    assert board.mark_all_read("Barry") == {"threads_marked": 0, "messages_marked": 0}
+    with board.connect() as con:
+        assert [tuple(row) for row in con.execute("SELECT * FROM messages ORDER BY id")] == messages_before
+        assert [tuple(row) for row in con.execute("SELECT * FROM threads ORDER BY id")] == activity_before
+        assert [tuple(row) for row in con.execute("SELECT * FROM read_markers WHERE author!='Barry' ORDER BY author,thread_id")] == other_markers_before
+
+
+def test_mark_all_read_empty_board_and_no_listing_limit(tmp_path):
+    board = Store(tmp_path)
+    assert board.mark_all_read("Barry") == {"threads_marked": 0, "messages_marked": 0}
+    with pytest.raises(ValueError, match="Author"):
+        board.mark_all_read("Imposter")
+    board.create_project("many", "Many")
+    # Exceed even the maximum list_threads limit. Use normal writes so all
+    # message, timestamp, and foreign-key invariants remain exercised.
+    for index in range(1001):
+        board.create_thread("Astra", "many", f"Discussion {index}", "Unread")
+    assert board.mark_all_read("Barry") == {"threads_marked": 1001, "messages_marked": 1001}
+    assert board.list_projects("Barry")[0]["unread_count"] == 0
+    with board.connect() as con:
+        assert con.execute("SELECT COUNT(*) FROM read_markers WHERE author='Barry'").fetchone()[0] == 1001
+
+
+def test_mark_all_read_excludes_writer_waiting_for_commit(board, monkeypatch):
+    from contextlib import contextmanager
+    from concurrent.futures import TimeoutError
+    from threading import Event, current_thread
+
+    thread_id = thread(board)
+    previous_last = board.read_thread("Barry", thread_id)["thread"]["last_message_id"]
+    writer = Store(board.directory)
+    attempted = Event()
+    original_connect = sqlite3.connect
+
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if sql == "BEGIN IMMEDIATE" and current_thread().name.startswith("arriving-writer"):
+                attempted.set()
+            return super().execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: original_connect(*args, factory=ObservedConnection, **kwargs))
+    original_board_connect = board.connect
+    arrivals = []
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="arriving-writer") as executor:
+        @contextmanager
+        def held_bulk_transaction(*args, **kwargs):
+            with original_board_connect(*args, **kwargs) as con:
+                if kwargs.get("write"):
+                    arrivals.append(executor.submit(writer.post_message, "Astra", thread_id, "Arrived during bulk acknowledgement"))
+                    assert attempted.wait(timeout=3)
+                    # The new write has attempted BEGIN IMMEDIATE but cannot
+                    # complete while the bulk operation owns the write lock.
+                    with pytest.raises(TimeoutError):
+                        arrivals[0].result(timeout=0.05)
+                yield con
+
+        monkeypatch.setattr(board, "connect", held_bulk_transaction)
+        assert board.mark_all_read("Barry") == {"threads_marked": 1, "messages_marked": 1}
+        arrival = arrivals[0].result(timeout=3)
+    monkeypatch.setattr(board, "connect", original_board_connect)
+    snapshot = board.read_thread("Barry", thread_id)["thread"]
+    assert snapshot["last_read_message_id"] == previous_last
+    assert snapshot["last_message_id"] == arrival["id"]
+    assert snapshot["unread_count"] == 1

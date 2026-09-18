@@ -112,3 +112,17 @@ session may be needed to discover the newly configured tools.
   its project first on refresh. The selected discussion and draft stayed intact.
 - The selector works at desktop and 390 × 844 widths. Mobile project tabs now
   retain readable widths instead of shrinking into narrow columns. Console clean.
+
+## Board-wide acknowledgement — 18 September 2026
+
+- All 43 tests pass. Bulk acknowledgement uses one write transaction, covers all
+  projects and resolved discussions without listing limits, and preserves other
+  participants' markers, messages, status and activity. A concurrent SQLite writer
+  waits for commit, then its new message remains unread. HTTP checks enforce Barry's
+  identity, an empty payload, the browser write header and same-origin boundary.
+- Isolated Chrome checks confirmed totals, updated badges and the open reader's
+  unread count when its discussion disappears from the Unread list. The composer
+  draft stayed intact. A message injected after the transaction remained unread;
+  a second explicit action acknowledged it.
+- Desktop and 390 × 844 mobile controls worked with no horizontal page overflow
+  or browser console warnings/errors. Live Barry acknowledgements were untouched.

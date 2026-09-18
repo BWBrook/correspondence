@@ -7,8 +7,9 @@ import {
   UserRound,
   Monitor,
   FolderOpen,
+  CheckCheck,
 } from "lucide-react";
-import { api } from "./api";
+import { api, post } from "./api";
 import { CreateForm, UnreadCounts } from "./components";
 import { ThreadReader } from "./ThreadReader";
 import { SearchDialog } from "./SearchDialog";
@@ -57,16 +58,34 @@ function App() {
   const threadId = route.threadId;
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [searchScope, setSearchScope] = useState(null);
+  const [markingAll, setMarkingAll] = useState(false),
+    [readAllNotice, setReadAllNotice] = useState(""),
+    [readAllError, setReadAllError] = useState(""),
+    [readAllThread, setReadAllThread] = useState(null);
+  const markingAllRef = useRef(false);
   const [modal, setModal] = useState(null),
     [error, setError] = useState("");
   const currentProject = useRef(projectId),
     currentUnread = useRef(unreadOnly),
-    listRequest = useRef(0);
+    listRequest = useRef(0),
+    projectRequest = useRef(0);
   currentProject.current = projectId;
   currentUnread.current = unreadOnly;
   const project = projects.find((p) => p.id === projectId);
+  const listedThread = threads.find((thread) => thread.id === threadId);
+  // An acknowledged thread disappears from an Unread-filtered list. Retain its
+  // fresh metadata so the open reader also reflects the explicit bulk action.
+  const readerThread =
+    readAllThread?.id === threadId &&
+    (!listedThread ||
+      readAllThread.last_read_message_id > listedThread.last_read_message_id ||
+      readAllThread.last_message_id > listedThread.last_message_id)
+      ? readAllThread
+      : listedThread;
   const refreshProjects = useCallback(async () => {
+    const sequence = ++projectRequest.current;
     const list = await api("/projects");
+    if (sequence !== projectRequest.current) return list;
     setProjects(list);
     setProjectId(
       (previous) =>
@@ -95,6 +114,32 @@ function App() {
   const refreshCounts = useCallback(async () => {
     await Promise.all([refreshProjects(), refreshList()]);
   }, [refreshProjects, refreshList]);
+  async function markAllRead() {
+    if (markingAllRef.current) return;
+    markingAllRef.current = true;
+    setMarkingAll(true);
+    setReadAllNotice("");
+    setReadAllError("");
+    try {
+      const result = await post("/read-all", {});
+      setReadAllNotice(
+        `${result.messages_marked} unread ${result.messages_marked === 1 ? "message" : "messages"} acknowledged across ${result.threads_marked} ${result.threads_marked === 1 ? "thread" : "threads"}.`,
+      );
+      await Promise.all([
+        refreshCounts(),
+        threadId
+          ? api(`/threads/${threadId}?mode=latest&limit=1`).then((result) =>
+              setReadAllThread(result.thread),
+            )
+          : Promise.resolve(),
+      ]);
+    } catch (error) {
+      setReadAllError(error.message);
+    } finally {
+      markingAllRef.current = false;
+      setMarkingAll(false);
+    }
+  }
   useEffect(() => {
     refreshProjects().catch((e) => setError(e.message));
   }, [refreshProjects]);
@@ -167,6 +212,23 @@ function App() {
             <option value="activity">Latest activity</option>
           </select>
         </label>
+        <div className="board-read-actions">
+          <button
+            className="text-button"
+            disabled={markingAll}
+            onClick={markAllRead}
+            title="Mark every thread in every project read for Barry, including messages not displayed. Later arrivals remain unread."
+          >
+            <CheckCheck size={17} />{" "}
+            {markingAll ? "Marking all read…" : "Mark all threads read"}
+          </button>
+          {readAllNotice && <p role="status">{readAllNotice}</p>}
+          {readAllError && (
+            <p role="alert" className="error">
+              {readAllError}
+            </p>
+          )}
+        </div>
         <nav aria-label="Projects">
           <h2>Projects</h2>
           <button
@@ -301,7 +363,7 @@ function App() {
         <ThreadReader
           key={threadId}
           route={route}
-          listed={threads.find((t) => t.id === threadId)}
+          listed={readerThread}
           onNavigate={(options) => navigate(threadId, options)}
           onProject={setProjectId}
           onBack={() => selectProject(projectId)}

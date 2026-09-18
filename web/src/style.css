@@ -152,6 +152,21 @@ label > span {
   margin-top: 6px;
   font-size: 13px;
 }
+.board-read-actions {
+  margin: 0 20px 16px;
+}
+.board-read-actions button {
+  font-size: 13px;
+  text-align: left;
+}
+.board-read-actions p {
+  margin: 6px 4px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.board-read-actions p:not(.error) {
+  color: var(--muted);
+}
 .project {
   width: 100%;
   border: 0;

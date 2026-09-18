@@ -139,3 +139,22 @@ def test_search_endpoint_scope_cursor_and_validation(client):
         for value in (0, -1, "abc", 2**63):
             assert client.get("/api/search", params={"q": "match", field: value}).status_code == 422
     assert board.read_thread("Barry", first)["thread"]["last_read_message_id"] == 0
+
+
+def test_mark_all_read_http_identity_payload_and_origin(client):
+    board = client.app.state.store
+    board.create_project("bulk", "Bulk")
+    thread_id = board.create_thread("Astra", "bulk", "Unread", "Opening")["id"]
+    assert client.post("/api/read-all", json={}, headers={**HEADERS, "Origin": "https://evil.example"}).status_code == 403
+    assert client.post("/api/read-all", json={}).status_code == 403
+    assert client.post("/api/read-all", content="{}", headers={**HEADERS, "Content-Type": "text/plain"}).status_code == 415
+    assert client.post("/api/read-all", json={"author": "Fable"}, headers=HEADERS).status_code == 422
+    assert client.post("/api/read-all", json={"thread_id": thread_id}, headers=HEADERS).status_code == 422
+    assert client.post("/api/read-all", headers={**HEADERS, "Content-Type": "application/json"}).status_code == 422
+    assert board.read_thread("Barry", thread_id)["thread"]["read_markers"] == {"Barry": 0, "Astra": 0, "Fable": 0}
+    response = client.post("/api/read-all", json={}, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json() == {"threads_marked": 1, "messages_marked": 1}
+    metadata = board.read_thread("Barry", thread_id)["thread"]
+    assert metadata["read_markers"] == {"Barry": metadata["last_message_id"], "Astra": 0, "Fable": 0}
+    assert client.post("/api/read-all", json={}, headers=HEADERS).json() == {"threads_marked": 0, "messages_marked": 0}

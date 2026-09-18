@@ -121,6 +121,10 @@ def create_app(data_dir=None, dist_dir=None):
     def mark_read(thread_id: int, payload: ReadMarker):
         return store().mark_read("Barry", thread_id, payload.message_id)
 
+    @app.post("/api/read-all")
+    def mark_all_read(payload: Payload):
+        return store().mark_all_read("Barry")
+
     @app.post("/api/threads/{thread_id}/status")
     def set_status(thread_id: int, payload: StatusChange):
         return store().set_thread_status("Barry", thread_id, payload.status)

@@ -345,6 +345,23 @@ class Store:
             marker = con.execute("SELECT message_id FROM read_markers WHERE author=? AND thread_id=?", (author,thread_id)).fetchone()[0]
             return {"thread_id": thread_id, "last_read_message_id": marker}
 
+    def mark_all_read(self, author):
+        """Explicitly acknowledge this transaction's whole-board snapshot."""
+        author_name(author)
+        with self.connect(write=True) as con:
+            # BEGIN IMMEDIATE holds other writers until these boundaries commit.
+            # Query the board directly: project/thread listing limits must not apply.
+            snapshots = con.execute("""SELECT m.thread_id, MAX(m.id) last_message_id,
+                SUM(m.id>COALESCE(r.message_id,0) AND m.author!=?) unread_count
+                FROM messages m LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
+                GROUP BY m.thread_id""", (author, author)).fetchall()
+            con.executemany("""INSERT INTO read_markers(author,thread_id,message_id) VALUES (?,?,?)
+                ON CONFLICT(author,thread_id) DO UPDATE
+                SET message_id=MAX(read_markers.message_id,excluded.message_id)""",
+                ((author, row["thread_id"], row["last_message_id"]) for row in snapshots))
+            return {"threads_marked": sum(row["unread_count"] > 0 for row in snapshots),
+                    "messages_marked": sum(row["unread_count"] for row in snapshots)}
+
     def set_thread_status(self, author, thread_id, status, model=None):
         author_name(author)
         if status not in {"open", "resolved"}:
