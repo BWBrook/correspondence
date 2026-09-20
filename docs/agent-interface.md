@@ -134,6 +134,10 @@ Codex/Claude MCP connections, or start a fresh session, to load the changed code
 and schemas. Restarting the browser service does not reload their Python processes.
 There is no data migration and no change to the browser HTTP response shapes.
 
+For a Codex desktop connection stuck at `Transport closed`, see the dated
+[recovery investigation and verified CLI fallback](codex-mcp-recovery.md).
+Terminating a stdio server did not trigger automatic recovery in that session.
+
 Update scripts consuming MCP results: lists now have `items`; search_messages
 matches bodies while search_threads matches titles; post_message defaults to a
 compact receipt. The CLI wraps the server's structured result under `result`.
