@@ -25,16 +25,22 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
                 info = await session.initialize()
                 assert f"configured author is {author}" in info.instructions
                 tools = await session.list_tools()
-                assert len(tools.tools) == 12
+                assert len(tools.tools) == 16
                 assert "get_message" in {tool.name for tool in tools.tools}
                 for tool in tools.tools:
                     assert "author" not in tool.inputSchema.get("properties", {})
+                    assert tool.outputSchema is not None
+                schemas = {tool.name: tool.inputSchema["properties"] for tool in tools.tools}
+                assert schemas["read_thread"]["mode"]["enum"] == ["oldest", "latest", "unread"]
+                assert schemas["read_updates"]["max_bytes"]["minimum"] == 1000
+                assert schemas["get_messages"]["message_ids"]["maxItems"] == 50
                 info_result = await session.call_tool("board_info", {})
                 diagnostic = json.loads(info_result.content[0].text)
                 assert diagnostic["participant"] == author
                 assert diagnostic["pid"] != os.getpid()
                 assert diagnostic["revision"] and diagnostic["started_at"]
                 assert diagnostic["idle_timeout_seconds"] == 0
+                assert diagnostic["api_version"] == 2
                 await action(session)
 
     async def astra(session):
@@ -65,9 +71,9 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
         assert (await session.call_tool("read_thread", {"thread_id": 1, "mode": "latest", "after": 1})).isError
         search = await session.call_tool("search_messages", {"q": "e", "thread_id": 1, "before": latest_data["messages"][0]["id"], "limit": 1})
         assert not search.isError
-        assert json.loads(search.content[0].text)["id"] == message["id"]
+        assert search.structuredContent["items"][0]["id"] == message["id"]
         mismatch = await session.call_tool("search_messages", {"q": "e", "project_id": "missing", "thread_id": 1})
-        assert not mismatch.isError and mismatch.content == []
+        assert not mismatch.isError and mismatch.structuredContent["items"] == []
         assert (await session.call_tool("search_messages", {"q": "e", "thread_id": 0})).isError
         assert (await session.call_tool("search_messages", {"q": "e", "before": -1})).isError
         assert not (await session.call_tool("mark_read", {"thread_id": 1, "message_id": message["id"]})).isError
@@ -84,6 +90,60 @@ def test_invalid_idle_timeout_rejected(tmp_path, monkeypatch, value):
     monkeypatch.setenv("CORRESPONDENCE_MCP_IDLE_SECONDS", value)
     with pytest.raises(ValueError, match="finite and nonnegative"):
         build_server(tmp_path, author="Astra")
+
+
+@pytest.mark.parametrize("participant,other", [("Astra", "Fable"), ("Fable", "Astra")])
+def test_agent_workflow_over_real_stdio(tmp_path, participant, other):
+    board = Store(tmp_path)
+    board.create_project("demo", "Demo")
+    thread = board.create_thread(other, "demo", "Title only needle", "Opening")
+    root = thread["first_message_id"]
+    finding = board.post_message(other, thread["id"], "Precise objection", "counterexample", root)
+    board.mark_read(participant, thread["id"], finding["id"])
+
+    async def exercise():
+        params = StdioServerParameters(command=sys.executable, args=["-m", "correspondence.mcp_server"], env={
+            **os.environ, "CORRESPONDENCE_DATA_DIR": str(tmp_path), "CORRESPONDENCE_AUTHOR": participant})
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                async def call(tool, **args):
+                    result = await session.call_tool(tool, args)
+                    assert not result.isError, result
+                    assert result.structuredContent == json.loads(result.content[0].text)
+                    return result.structuredContent
+
+                assert (await call("read_updates", thread_id=thread["id"]))["messages"] == []
+                # This task's cursor is independent of another task's shared marker.
+                updates = await call("read_updates", thread_id=thread["id"], after=0, limit=1)
+                assert updates["has_more"] and updates["messages"][0]["id"] == root
+                continuation = await call("read_updates", thread_id=thread["id"], after=updates["next_after"], through=updates["through"])
+                assert [m["id"] for m in continuation["messages"]] == [finding["id"]]
+                inbox = await call("inbox", project_id="demo", after=0, limit=1)
+                assert "body" not in inbox["items"][0] and inbox["has_more"]
+                assert (await call("inbox", project_id="demo", unread_only=True))["items"] == []
+                matches = await call("search_messages", q="objection", project_id="demo", author_filter=other, kind="counterexample", since="2020-01-01T00:00:00Z")
+                assert [m["id"] for m in matches["items"]] == [finding["id"]]
+                assert (await call("search_messages", q="needle"))["items"] == []
+                assert [t["id"] for t in (await call("search_threads", q="needle"))["items"]] == [thread["id"]]
+                context = await call("get_messages", message_ids=[finding["id"], 99999], include_parents=True)
+                assert [m["id"] for m in context["messages"]] == [finding["id"], root]
+                assert context["missing_ids"] == [99999]
+                payload = dict(thread_id=thread["id"], body="    Exact leading indentation\n", parent_id=finding["id"], request_id="safe-retry")
+                receipt = await call("post_message", **payload)
+                assert "body" not in receipt and receipt["author"] == participant
+                assert f"message={receipt['id']}" in receipt["url"]
+                assert (await call("post_message", **payload))["id"] == receipt["id"]
+                full = await call("post_message", compact=False, **payload)
+                assert full["body"].startswith("    Exact") and full["id"] == receipt["id"]
+                for tool, args in [("get_messages", {"message_ids": []}), ("read_updates", {"thread_id": True}), ("search_messages", {"q": "x", "kind": "invalid"})]:
+                    assert (await session.call_tool(tool, args)).isError
+
+    asyncio.run(exercise())
+    assert board.read_thread(participant, thread["id"])["thread"]["last_read_message_id"] == finding["id"]
+    with board.connect() as con:
+        assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 3
 
 
 def test_stdio_idle_exit_preserves_traffic_and_inflight_call(tmp_path):

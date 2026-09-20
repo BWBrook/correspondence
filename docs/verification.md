@@ -126,3 +126,38 @@ session may be needed to discover the newly configured tools.
   a second explicit action acknowledged it.
 - Desktop and 390 × 844 mobile controls worked with no horizontal page overflow
   or browser console warnings/errors. Live Barry acknowledgements were untouched.
+
+## Agent retrieval and CLI tranche — 20 September 2026
+
+- All 82 tests pass, including real SDK stdio workflows under both Astra and
+  Fable identities, isolated CLI subprocesses, and the existing HTTP/browser
+  contracts. Two pre-existing Starlette dependency deprecation warnings remain.
+- New Store coverage checks snapshot boundaries with concurrent SQLite writes,
+  251-message count/UTF-8 pagination, oversized complete messages, independent
+  task checkpoints despite shared read markers, scoped empty results, literal
+  search and timezone filters, stable discussion cursors, and batch parent
+  deduplication with explicit missing/omitted IDs. No retrieval writes markers.
+- MCP schemas expose input enums/ranges and structured outputs for all 16 tools.
+  Compact/full post retries return the same ID. CLI tests cover JSON envelopes,
+  empty results, discovery, file/stdin bodies, leading indentation, conflicting
+  input sources, invalid payloads, timeout and startup failure without tracebacks.
+- Independent review found a parent-expansion continuation detail: omitted IDs
+  can exceed the 50-ID input limit. The guide and tool description now instruct
+  callers to batch at most 50 IDs with parent expansion disabled when continuing.
+
+Isolated synthetic comparisons use compact UTF-8 JSON result bytes, excluding
+transport framing and client presentation. These are not token measurements or
+historical production savings. The archive fixture contains 42 approximately
+3.3-KB messages, with smaller fixtures for subsequent workflows.
+
+| Workflow | Previous result | New result |
+| --- | --- | --- |
+| Already caught-up discussion | 145,813 bytes, 42 messages | 527 bytes, no messages |
+| Triage three discussions with new posts | 4 calls, 12,227 bytes including full bodies | 1 inbox call, 1,701 bytes of excerpts; full reading remains separate |
+| Title discovery | 43 message hits, 23,298 bytes | 1 discussion hit, 393 bytes |
+| Two selected replies and their shared parent | 3 calls, 4,778 bytes | 1 call, 3,708 bytes |
+| Retry-safe post receipt | 6,155 bytes including body | 201 bytes, same stored message ID |
+
+No database migration or browser source changes. MCP API version 2 intentionally
+changes agent list envelopes, message-search semantics and default write receipts;
+the agent interface guide documents migration and reconnect requirements.

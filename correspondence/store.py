@@ -405,6 +405,212 @@ class Store:
         row["body_length"] = len(body)
         return row
 
+    @staticmethod
+    def _agent_id(value, name, *, optional=False, zero=False):
+        if value is None and optional:
+            return
+        if type(value) is not int or not (0 if zero else 1) <= value <= 2**63 - 1:
+            raise ValueError(f"{name} must be a {'nonnegative' if zero else 'positive'} SQLite integer id")
+
+    @staticmethod
+    def _agent_options(project_id=None, thread_id=None, limit=20, max_bytes=None, *, thread_page=False):
+        if project_id is not None and (not isinstance(project_id, str) or len(project_id) > 100
+                or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", project_id)):
+            raise ValueError("project_id must be a lowercase hyphenated slug, up to 100 characters")
+        Store._agent_id(thread_id, "thread_id", optional=True)
+        maximum = 1000 if thread_page else 500
+        if type(limit) is not int or not 1 <= limit <= maximum:
+            raise ValueError(f"limit must be between 1 and {maximum}")
+        if max_bytes is not None and (type(max_bytes) is not int or not 1000 <= max_bytes <= 10_000_000):
+            raise ValueError("max_bytes must be between 1000 and 10000000")
+
+    @staticmethod
+    def _literal_pattern(q):
+        return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+    @staticmethod
+    def _items_bytes(items):
+        return len(json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    @staticmethod
+    def _bounded_messages(rows, max_bytes, limit=None):
+        """Budget the compact JSON message array, admitting a first oversized item."""
+        items, size, has_more = [], 2, False  # JSON array brackets count too.
+        for row in rows:
+            item = dict(row)
+            item_size = Store._items_bytes([item]) - 2
+            candidate_size = size + item_size + bool(items)
+            if items and ((limit is not None and len(items) >= limit) or candidate_size > max_bytes):
+                has_more = True
+                break
+            items.append(item)
+            size = candidate_size
+        return items, size, size > max_bytes, has_more
+
+    @staticmethod
+    def _snapshot_bound(con, after, through):
+        Store._agent_id(after, "after", zero=True)
+        Store._agent_id(through, "through", optional=True, zero=True)
+        maximum = con.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+        if through is None:
+            through = maximum
+        if after > through or through > maximum:
+            raise ValueError("Require after <= through <= the current maximum message id")
+        return through
+
+    def inbox(self, author, project_id=None, thread_id=None, after=0, through=None, limit=20, unread_only=False):
+        """Compact chronological updates in (after, through]; unread_only is live triage, not durable synchronization.
+
+        total counts this request's remaining matching interval. Exhausted pages
+        advance next_after to through, including empty/filtered gaps. returned_bytes
+        measures the UTF-8 compact JSON items array. No acknowledgement is changed.
+        """
+        author_name(author)
+        self._agent_options(project_id, thread_id, limit)
+        if type(unread_only) is not bool:
+            raise ValueError("unread_only must be boolean")
+        with self.connect() as con:
+            through = self._snapshot_bound(con, after, through)
+            where = """FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
+                LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
+                WHERE m.id>? AND m.id<=? AND (? IS NULL OR t.project_id=?)
+                AND (? IS NULL OR m.thread_id=?)
+                AND (?=0 OR (m.id>COALESCE(r.message_id,0) AND m.author!=?))"""
+            parameters = (author, after, through, project_id, project_id, thread_id, thread_id, unread_only, author)
+            total = con.execute("SELECT COUNT(*) " + where, parameters).fetchone()[0]
+            rows = con.execute("SELECT m.*,t.project_id,t.title thread_title,p.name project_name " + where + " ORDER BY m.id LIMIT ?", (*parameters, limit))
+            items = [self._snippet(dict(row), "") for row in rows]
+            has_more = total > len(items)
+            return {"items": items, "has_more": has_more,
+                    "next_after": items[-1]["id"] if has_more else through,
+                    "through": through, "total": total, "returned_bytes": self._items_bytes(items)}
+
+    def read_updates(self, author, thread_id, after=None, through=None, limit=20, max_bytes=25000):
+        """Read full updates without a latest-page fallback or implicit acknowledgement.
+
+        after=None starts at the participant's marker; explicit after ignores it.
+        through/next_after are global checkpoints, not necessarily valid thread
+        acknowledgement IDs. The byte budget counts the UTF-8 JSON messages array.
+        One oversized first message is returned whole and explicitly flagged.
+        """
+        author_name(author)
+        self._agent_options(thread_id=thread_id, limit=limit, max_bytes=max_bytes)
+        self._agent_id(thread_id, "thread_id")
+        self._agent_id(after, "after", optional=True, zero=True)
+        with self.connect() as con:
+            thread = self._thread(con, thread_id, author)
+            if after is None:
+                after = thread["last_read_message_id"]
+            through = self._snapshot_bound(con, after, through)
+            rows = con.execute("SELECT * FROM messages WHERE thread_id=? AND id>? AND id<=? ORDER BY id LIMIT ?",
+                               (thread_id, after, through, limit + 1))
+            messages, size, oversized, has_more = self._bounded_messages(rows, max_bytes, limit)
+            return {"thread": thread, "messages": messages, "has_more": has_more,
+                    "next_after": messages[-1]["id"] if has_more else through,
+                    "through": through, "returned_bytes": size, "oversized": oversized}
+
+    def get_messages(self, author, message_ids, include_parents=False, max_bytes=25000):
+        """Read requested IDs in request order, then unique direct parents; expose all missing/omitted IDs."""
+        author_name(author)
+        self._agent_options(max_bytes=max_bytes)
+        if not isinstance(message_ids, (list, tuple)) or not 1 <= len(message_ids) <= 50:
+            raise ValueError("message_ids must contain 1–50 IDs")
+        for message_id in message_ids:
+            self._agent_id(message_id, "message_ids")
+        if type(include_parents) is not bool:
+            raise ValueError("include_parents must be boolean")
+        requested = list(dict.fromkeys(message_ids))
+        with self.connect() as con:
+            def fetch(ids):
+                if not ids:
+                    return {}
+                rows = con.execute(f"""SELECT m.*,t.project_id,t.title thread_title
+                    FROM messages m JOIN threads t ON t.id=m.thread_id
+                    WHERE m.id IN ({','.join('?' for _ in ids)})""", ids)
+                return {row["id"]: dict(row) for row in rows}
+
+            found = fetch(requested)
+            missing = [message_id for message_id in requested if message_id not in found]
+            candidates = [message_id for message_id in requested if message_id in found]
+            if include_parents:
+                parents = list(dict.fromkeys(found[message_id]["parent_id"] for message_id in candidates
+                                             if found[message_id]["parent_id"] is not None
+                                             and found[message_id]["parent_id"] not in requested))
+                parent_rows = fetch(parents)
+                found.update(parent_rows)
+                missing.extend(message_id for message_id in parents if message_id not in parent_rows)
+                candidates.extend(message_id for message_id in parents if message_id in parent_rows)
+            messages, size, oversized, _ = self._bounded_messages((found[message_id] for message_id in candidates), max_bytes)
+            return {"messages": messages, "missing_ids": missing, "omitted_ids": candidates[len(messages):],
+                    "returned_bytes": size, "oversized": oversized}
+
+    def search_messages_page(self, author, q, project_id=None, thread_id=None, author_filter=None,
+                             kind=None, since=None, after=0, before=None, limit=20):
+        """Search body text only; scope/filter intersections and descending immutable-ID pages."""
+        author_name(author)
+        self._agent_options(project_id, thread_id, limit)
+        self._agent_id(after, "after", zero=True)
+        self._agent_id(before, "before", optional=True)
+        q = clean_text(q, "q", 500)
+        if author_filter is not None:
+            author_name(author_filter)
+        if kind is not None and kind not in KINDS:
+            raise ValueError("Unknown message kind")
+        if since is not None:
+            try:
+                timestamp = datetime.fromisoformat(since)
+                if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                    raise ValueError("Timezone required")
+                since = timestamp.astimezone(timezone.utc).isoformat(timespec="microseconds")
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError("since must be a timezone-aware ISO8601 timestamp") from error
+        with self.connect() as con:
+            rows = con.execute("""SELECT m.*,t.project_id,t.title thread_title,p.name project_name
+                FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
+                WHERE m.body LIKE ? ESCAPE '\\' AND (? IS NULL OR t.project_id=?)
+                AND (? IS NULL OR m.thread_id=?) AND (? IS NULL OR m.author=?)
+                AND (? IS NULL OR m.kind=?) AND (? IS NULL OR m.created_at>=?)
+                AND m.id>? AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
+                (self._literal_pattern(q), project_id, project_id, thread_id, thread_id,
+                 author_filter, author_filter, kind, kind, since, since, after, before, before, limit + 1)).fetchall()
+            items = [self._snippet(dict(row), q) for row in rows[:limit]]
+            return {"items": items, "has_more": len(rows) > limit,
+                    "next_before": items[-1]["id"] if items else before}
+
+    @staticmethod
+    def _compact_thread(record):
+        fields = ("id", "project_id", "title", "status", "updated_at", "message_count",
+                  "last_message_id", "unread_count", "last_read_message_id", "first_unread_message_id",
+                  "read_markers", "unread_counts", "last_author")
+        return {field: record[field] for field in fields}
+
+    def _threads_page(self, author, project_id, unread_only, limit, before, q=None):
+        author_name(author)
+        self._agent_options(project_id, limit=limit, thread_page=True)
+        self._agent_id(before, "before", optional=True)
+        if type(unread_only) is not bool:
+            raise ValueError("unread_only must be boolean")
+        pattern = None if q is None else self._literal_pattern(clean_text(q, "q", 500))
+        with self.connect() as con:
+            rows = con.execute("""SELECT t.* FROM threads t
+                WHERE (? IS NULL OR t.project_id=?) AND (? IS NULL OR t.id<?)
+                AND (? IS NULL OR t.title LIKE ? ESCAPE '\\')
+                AND (?=0 OR EXISTS (SELECT 1 FROM messages m LEFT JOIN read_markers r
+                    ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author!=?
+                    AND m.id>COALESCE(r.message_id,0))) ORDER BY t.id DESC LIMIT ?""",
+                (project_id, project_id, before, before, pattern, pattern, unread_only, author, author, limit + 1)).fetchall()
+            items = [self._compact_thread(record) for record in self._thread_records(con, [dict(row) for row in rows[:limit]], author)]
+            return {"items": items, "has_more": len(rows) > limit,
+                    "next_before": items[-1]["id"] if items else before}
+
+    def search_threads(self, author, q, project_id=None, before=None, limit=20):
+        """Search titles once per discussion; activity changes do not move ID cursors."""
+        return self._threads_page(author, project_id, False, limit, before, q)
+
+    def list_threads_page(self, author, project_id=None, unread_only=False, limit=50, before=None):
+        """Enumerate discussions by descending immutable ID, with explicit continuation."""
+        return self._threads_page(author, project_id, unread_only, limit, before)
+
     def export_thread(self, author, thread_id):
         author_name(author)
         with self.connect() as con:
