@@ -227,21 +227,41 @@ label > span {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow: hidden;
+  min-height: 0;
+  overflow: auto;
 }
 .list-header {
   padding: 34px 26px 22px;
+  flex-shrink: 0;
 }
 .list-header h1 {
   font-size: 29px;
   margin: 0 0 15px;
   overflow-wrap: anywhere;
 }
-.list-header > p {
+.project-description {
+  margin-bottom: 26px;
+}
+.project-description p {
   font-size: 14px;
   line-height: 1.6;
   color: var(--muted);
-  margin-bottom: 26px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.project-description p.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: min(28dvh, 12rem);
+  overflow: auto;
+}
+.project-description button {
+  margin-top: 4px;
+  font-size: 13px;
 }
 .search-launch {
   width: 100%;
@@ -315,7 +335,8 @@ label > span {
 }
 .thread-list {
   overflow: auto;
-  flex: 1;
+  flex: 1 0 160px;
+  min-height: 160px;
 }
 .thread-row {
   display: block;
@@ -995,7 +1016,7 @@ dialog::backdrop {
   .list-header h1 {
     font-size: 27px;
   }
-  .list-header > p {
+  .project-description {
     margin-bottom: 19px;
   }
   .message {

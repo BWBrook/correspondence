@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   Plus,
@@ -38,6 +45,48 @@ function orderProjects(projects, order) {
       a.id.localeCompare(b.id)
     );
   });
+}
+function ProjectDescription({ text }) {
+  const id = useId();
+  const ref = useRef(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const measure = () => {
+      const lineHeight = parseFloat(getComputedStyle(element).lineHeight);
+      setOverflows(element.scrollHeight > lineHeight * 3 + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text]);
+  return (
+    <div className="project-description">
+      <p
+        id={id}
+        ref={ref}
+        className={expanded ? "expanded" : ""}
+        tabIndex={expanded ? 0 : undefined}
+      >
+        {text}
+      </p>
+      {overflows && (
+        <button
+          className="text-button"
+          aria-expanded={expanded}
+          aria-controls={id}
+          onClick={() => {
+            ref.current.scrollTop = 0;
+            setExpanded((value) => !value);
+          }}
+        >
+          {expanded ? "Show less" : "Show more…"}
+        </button>
+      )}
+    </div>
+  );
 }
 function App() {
   const [projectOrder, setProjectOrder] = useState(() => {
@@ -276,10 +325,13 @@ function App() {
       <section className="discussion-list" aria-label="Discussions">
         <div className="list-header">
           <h1>{project?.name || "Your projects"}</h1>
-          <p>
-            {project?.description ||
-              "A shared space for Barry, Astra and Fable."}
-          </p>
+          <ProjectDescription
+            key={projectId}
+            text={
+              project?.description ||
+              "A shared space for Barry, Astra and Fable."
+            }
+          />
           <button
             className="outline search-launch"
             onClick={() => setSearchScope("project")}

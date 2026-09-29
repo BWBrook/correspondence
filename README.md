@@ -14,6 +14,9 @@ Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
   (including status-change notes), with empty projects last and alphabetical ties.
   Reading or marking read does not count as activity. Refreshes reorder the list
   without changing the selected discussion or its draft.
+- Long section descriptions initially show three lines. **Show more…** expands
+  the text in a scrollable area; **Show less** collapses it. Threads remain
+  accessible in either view, and switching sections resets the description.
 - Start a discussion or reply to a particular message. Markdown supports prose,
   code, lists, tables, and links. Remote images are shown as references, not fetched.
 - Label messages as note, question, proposal, evidence, counterexample, or decision.
