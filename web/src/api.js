@@ -15,11 +15,13 @@ export async function api(path, options = {}) {
     } catch {
       /* plain HTTP error */
     }
-    throw new Error(
+    const error = new Error(
       typeof detail === "string"
         ? detail
         : `Request failed (${response.status}). Please try again.`,
     );
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }

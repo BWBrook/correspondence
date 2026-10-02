@@ -142,6 +142,10 @@ Use only while the assistant is already active or prompted; there is no automati
 Do not forge other participants' identities. Author is fixed by this process. Model metadata is configured separately.
 Consult relevant discussions and post consequential findings, objections, or questions within your authorized project work.
 Preserve unresolved disagreements; model agreement is not independent empirical validation.
+All reads default to active sections only. Set archived=true explicitly to browse archived sections only; the two views never mix.
+Archive lookup must be deliberately within the user or task scope; never automatically search archives when active context is missing.
+Archived sections are read-only: restore before posting, changing status or acknowledging. Archive/restore require expected_state from the section state_token and return the final section id/name with a new token. On conflict refresh; never blindly retry against a replacement section.
+Task checkpoints are scoped to the chosen active/archive view; restoring old messages does not make their IDs new. Start a fresh catch-up for the restored section.
 Messages are append-only. Correct a mistake by posting a reply with parent_id.
 Keep one discussion per review and post each finding as a reply, unless a separate discussion is independently useful.
 When relaying Barry's decisions, use his exact words as a quote only when available; label paraphrases as paraphrases.
@@ -175,29 +179,39 @@ read_thread keeps historical navigation semantics, including latest-page fallbac
         return {**process_info(participant), "idle_timeout_seconds": timeout, "api_version": 2}
 
     @server.tool(annotations=readonly)
-    def list_projects() -> Items:
+    def list_projects(*, archived: bool = False) -> Items:
         """List up to 1000 project sections, including unread counts for your identity."""
-        return {"items": store.list_projects(participant)}
+        return {"items": store.list_projects(participant, archived=archived)}
 
     @server.tool(annotations=write)
     def create_project(id: str, name: str, description: str = "", repo_path: str | None = None) -> dict[str, Any]:
         """Create a project section using a lowercase hyphenated id; identical repeated calls return the existing project."""
         return store.create_project(id, name, description, repo_path)
 
+    @server.tool(annotations=write)
+    def archive_project(project_id: str, expected_state: str) -> dict[str, Any]:
+        """Archive a section read-only, freeing its slug. expected_state must be its current state_token from list_projects. Returns its new archive id; preserve it for restoration."""
+        return store.archive_project(project_id, expected_state)
+
+    @server.tool(annotations=write)
+    def restore_project(project_id: str, expected_state: str) -> dict[str, Any]:
+        """Restore an archive by its archive id and current state_token as expected_state. Returns its final id/name, automatically renamed if either is occupied."""
+        return store.restore_project(project_id, expected_state)
+
     @server.tool(annotations=readonly)
-    def list_threads(project_id: str | None = None, unread_only: bool = False, limit: ThreadLimit = 50, before: PositiveID | None = None) -> BackwardPage:
+    def list_threads(project_id: str | None = None, unread_only: bool = False, limit: ThreadLimit = 50, before: PositiveID | None = None, *, archived: bool = False) -> BackwardPage:
         """Page discussion metadata, newest thread ID first. Filter by project or live unread state. Pass next_before while has_more. ID order is stable under new replies; browser activity ordering is separate. Never acknowledges."""
-        return store.list_threads_page(participant, project_id, unread_only, limit, before)
+        return store.list_threads_page(participant, project_id, unread_only, limit, before, archived=archived)
 
     @server.tool(annotations=readonly)
-    def inbox(project_id: str | None = None, thread_id: PositiveID | None = None, after: Checkpoint = 0, through: Checkpoint | None = None, limit: PageLimit = 20, unread_only: bool = False) -> InboxPage:
+    def inbox(project_id: str | None = None, thread_id: PositiveID | None = None, after: Checkpoint = 0, through: Checkpoint | None = None, limit: PageLimit = 20, unread_only: bool = False, *, archived: bool = False) -> InboxPage:
         """Discover scoped changes as chronological excerpts, not full bodies. after is this task's independent checkpoint; omitted through captures the current global boundary. Keep through fixed while paging, then save next_after and omit through on the next check. unread_only optionally filters by live shared acknowledgement: triage only. total counts remaining matches in this interval. Never acknowledges; cursor IDs are not mark_read IDs."""
-        return store.inbox(participant, project_id, thread_id, after, through, limit, unread_only)
+        return store.inbox(participant, project_id, thread_id, after, through, limit, unread_only, archived=archived)
 
     @server.tool(annotations=readonly)
-    def read_updates(thread_id: PositiveID, after: Checkpoint | None = None, through: Checkpoint | None = None, limit: PageLimit = 20, max_bytes: ByteBudget = 25_000) -> Updates:
+    def read_updates(thread_id: PositiveID, after: Checkpoint | None = None, through: Checkpoint | None = None, limit: PageLimit = 20, max_bytes: ByteBudget = 25_000, *, archived: bool = False) -> Updates:
         """Strict chronological catch-up: caught up returns no messages. Omitted after uses your shared participant marker; explicit after is independent task state. Keep through fixed while paging; on completion save next_after for the next check. Budget measures serialized message items in UTF-8; one oversized first message is returned intact with oversized=true. Never acknowledges. Use a returned message ID, not the global cursor, for any explicit mark_read."""
-        return store.read_updates(participant, thread_id, after, through, limit, max_bytes)
+        return store.read_updates(participant, thread_id, after, through, limit, max_bytes, archived=archived)
 
     @server.tool(annotations=write)
     def create_thread(project_id: str, title: str, body: str, kind: Kind = "note", request_id: str | None = None) -> dict[str, Any]:
@@ -205,19 +219,19 @@ read_thread keeps historical navigation semantics, including latest-page fallbac
         return store.create_thread(participant, project_id, title, body, kind, model_name, request_id)
 
     @server.tool(annotations=readonly)
-    def read_thread(thread_id: PositiveID, after: Checkpoint = 0, limit: PageLimit = 20, max_bytes: ByteBudget = 25_000, mode: ReadMode = "oldest", before: PositiveID | None = None) -> dict[str, Any]:
+    def read_thread(thread_id: PositiveID, after: Checkpoint = 0, limit: PageLimit = 20, max_bytes: ByteBudget = 25_000, mode: ReadMode = "oldest", before: PositiveID | None = None, *, archived: bool = False) -> dict[str, Any]:
         """Navigate a chronological page. oldest starts at beginning, latest at newest page, unread at first unread other-author message (latest if none). Prefer read_updates for strict catch-up. With oldest mode use after or before exclusively; other modes cannot combine with cursors. UTF-8 body budget, at least one full message. has_more/next_after and has_before/previous_before expose continuation. Never marks read."""
-        return store.read_thread(participant, thread_id, after, limit, max_bytes, mode=mode, before=before)
+        return store.read_thread(participant, thread_id, after, limit, max_bytes, mode=mode, before=before, archived=archived)
 
     @server.tool(annotations=readonly)
-    def get_message(message_id: PositiveID) -> dict[str, Any]:
+    def get_message(message_id: PositiveID, *, archived: bool = False) -> dict[str, Any]:
         """Retrieve one exact full message and its discussion metadata, including your read marker. Missing ids fail explicitly. Never marks read."""
-        return store.get_message(participant, message_id)
+        return store.get_message(participant, message_id, archived=archived)
 
     @server.tool(annotations=readonly)
-    def get_messages(message_ids: MessageIDs, include_parents: bool = False, max_bytes: ByteBudget = 25_000) -> MessageBatch:
+    def get_messages(message_ids: MessageIDs, include_parents: bool = False, max_bytes: ByteBudget = 25_000, *, archived: bool = False) -> MessageBatch:
         """Retrieve 1–50 selected IDs, then optional direct parents, deduplicated. Reports missing_ids and budget-omitted_ids; retry omitted IDs in batches of at most 50 with include_parents=false, or raise max_bytes. Budget counts serialized item UTF-8 bytes, with one oversized first item returned intact and flagged. No recursive ancestor expansion, no acknowledgement; selective retrieval must not skip read-marker gaps."""
-        return store.get_messages(participant, message_ids, include_parents, max_bytes)
+        return store.get_messages(participant, message_ids, include_parents, max_bytes, archived=archived)
 
     @server.tool(annotations=write)
     def post_message(thread_id: PositiveID, body: str, kind: Kind = "note", parent_id: PositiveID | None = None, request_id: str | None = None, compact: bool = True) -> dict[str, Any]:
@@ -236,14 +250,14 @@ read_thread keeps historical navigation semantics, including latest-page fallbac
         return store.mark_read(participant, thread_id, message_id)
 
     @server.tool(annotations=readonly)
-    def search_messages(q: str, project_id: str | None = None, limit: PageLimit = 20, thread_id: PositiveID | None = None, before: PositiveID | None = None, author_filter: Participant | None = None, kind: Kind | None = None, since: str | None = None, after: Checkpoint = 0) -> BackwardPage:
+    def search_messages(q: str, project_id: str | None = None, limit: PageLimit = 20, thread_id: PositiveID | None = None, before: PositiveID | None = None, author_filter: Participant | None = None, kind: Kind | None = None, since: str | None = None, after: Checkpoint = 0, *, archived: bool = False) -> BackwardPage:
         """Search literal BODY text only, returning excerpts newest ID first; use search_threads for titles. All supplied scope/author/kind/time/ID filters intersect. since is inclusive timezone-aware ISO8601; after/before are exclusive. Pass next_before while has_more. A decision's author is attribution, not proof of Barry's approval. Never acknowledges."""
-        return store.search_messages_page(participant, q, project_id, thread_id, author_filter, kind, since, after, before, limit)
+        return store.search_messages_page(participant, q, project_id, thread_id, author_filter, kind, since, after, before, limit, archived=archived)
 
     @server.tool(annotations=readonly)
-    def search_threads(q: str, project_id: str | None = None, before: PositiveID | None = None, limit: ThreadLimit = 20) -> BackwardPage:
+    def search_threads(q: str, project_id: str | None = None, before: PositiveID | None = None, limit: ThreadLimit = 20, *, archived: bool = False) -> BackwardPage:
         """Search literal discussion titles, one result per discussion; newest thread ID first. Optional project scope and exclusive next_before cursor. Fetch messages separately. Never acknowledges."""
-        return store.search_threads(participant, q, project_id, before, limit)
+        return store.search_threads(participant, q, project_id, before, limit, archived=archived)
 
     @server.tool(annotations=write)
     def set_thread_status(thread_id: PositiveID, status: Status) -> dict[str, Any]:
@@ -251,9 +265,9 @@ read_thread keeps historical navigation semantics, including latest-page fallbac
         return store.set_thread_status(participant, thread_id, status, model_name)
 
     @server.tool(annotations=readonly)
-    def export_thread(thread_id: PositiveID) -> str:
+    def export_thread(thread_id: PositiveID, *, archived: bool = False) -> str:
         """Return the complete discussion as Markdown, including attribution and reply references. Does not save files or mark read."""
-        return store.export_thread(participant, thread_id)
+        return store.export_thread(participant, thread_id, archived=archived)
 
     return server
 

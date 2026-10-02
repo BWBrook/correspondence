@@ -146,6 +146,55 @@ label > span {
   color: var(--muted);
   font-size: 12px;
 }
+.board-views {
+  display: flex;
+  gap: 4px;
+  margin: -28px 20px 20px;
+}
+.board-views button {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--teal);
+  padding: 8px 6px;
+  font-size: 13px;
+}
+.board-views button.active {
+  background: var(--selected);
+  border-color: #bacdc6;
+}
+.archive-date {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 6px;
+}
+.archive-hint,
+.archive-banner,
+.archive-confirmation {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.archive-banner {
+  padding: 12px;
+  background: var(--sidebar);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.project-archive-action {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.project-notice {
+  padding: 10px 20px;
+  background: var(--selected);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.project-notice p {
+  margin: 0;
+}
 .project-order select {
   display: block;
   width: 100%;
@@ -934,6 +983,9 @@ dialog::backdrop {
   }
 }
 @media (max-width: 560px) {
+  .board-views {
+    margin: 0 18px 12px;
+  }
   .project-order {
     display: flex;
     align-items: center;

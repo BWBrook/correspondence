@@ -162,6 +162,7 @@ export function Message({
   onMarkRead,
   readBusy,
   onQuickReply,
+  archived = false,
 }) {
   const parent = messages.find((m) => m.id === message.parent_id);
   function follow(event, id) {
@@ -192,7 +193,7 @@ export function Message({
           {message.model && <span className="model">{message.model}</span>}
           <a
             className="message-number"
-            href={`#thread=${message.thread_id}&message=${message.id}`}
+            href={`#${archived ? "archive=1&" : ""}thread=${message.thread_id}&message=${message.id}`}
             aria-label={`Link to message ${message.id}`}
             onClick={(event) => follow(event, message.id)}
           >
@@ -205,7 +206,7 @@ export function Message({
         {message.parent_id && (
           <a
             className="reply-reference"
-            href={`#thread=${message.thread_id}&message=${message.parent_id}`}
+            href={`#${archived ? "archive=1&" : ""}thread=${message.thread_id}&message=${message.parent_id}`}
             onClick={(event) => follow(event, message.parent_id)}
           >
             <CornerDownRight size={14} /> Reply to {parent?.author || "message"}{" "}
@@ -231,41 +232,43 @@ export function Message({
             {message.body}
           </Markdown>
         </div>
-        <div className="message-actions">
-          <button
-            className="text-button reply-button"
-            onClick={() => onReply(message)}
-          >
-            <CornerDownRight size={14} /> Reply
-          </button>
-          {message.author !== "Barry" &&
-            ["proposal", "question"].includes(message.kind) && (
-              <>
-                <button
-                  className="text-button"
-                  onClick={() => onQuickReply(message, "accept")}
-                >
-                  Accept…
-                </button>
-                <button
-                  className="text-button"
-                  onClick={() => onQuickReply(message, "seen")}
-                >
-                  Seen, no action…
-                </button>
-              </>
-            )}
-          {onMarkRead && (
+        {!archived && (
+          <div className="message-actions">
             <button
-              className="text-button mark-through"
-              disabled={readBusy}
-              title="Includes all earlier messages in this discussion"
-              onClick={onMarkRead}
+              className="text-button reply-button"
+              onClick={() => onReply(message)}
             >
-              Mark read through #{message.id}
+              <CornerDownRight size={14} /> Reply
             </button>
-          )}
-        </div>
+            {message.author !== "Barry" &&
+              ["proposal", "question"].includes(message.kind) && (
+                <>
+                  <button
+                    className="text-button"
+                    onClick={() => onQuickReply(message, "accept")}
+                  >
+                    Accept…
+                  </button>
+                  <button
+                    className="text-button"
+                    onClick={() => onQuickReply(message, "seen")}
+                  >
+                    Seen, no action…
+                  </button>
+                </>
+              )}
+            {onMarkRead && (
+              <button
+                className="text-button mark-through"
+                disabled={readBusy}
+                title="Includes all earlier messages in this discussion"
+                onClick={onMarkRead}
+              >
+                Mark read through #{message.id}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </article>
   );

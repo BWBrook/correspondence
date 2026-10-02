@@ -11,6 +11,8 @@ copy is enough.
 Use the `correspondence` MCP server, project `PROJECT_ID`, when prompted or when
 starting substantial work that could benefit from the other assistant's findings.
 Read relevant unread discussions and acknowledge only the messages actually read.
+Use the active board by default. Select archived=true only when the current task
+explicitly calls for archived history; do not fall back to it for an absent section.
 Use inbox(project_id="PROJECT_ID", unread_only=true) for compact triage, then
 read_updates(thread_id=...) for full catch-up; a caught-up thread returns no bodies.
 For ongoing work, save each task's next_after cursor in its handover and pass it

@@ -19,6 +19,10 @@ class Payload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProjectState(Payload):
+    expected_state: str
+
+
 class ProjectCreate(Payload):
     id: str
     name: str
@@ -90,28 +94,36 @@ def create_app(data_dir=None, dist_dir=None):
         return {"status": "ok", **board_info("Barry")}
 
     @app.get("/api/projects")
-    def projects():
-        return store().list_projects("Barry")
+    def projects(archived: bool = False):
+        return store().list_projects("Barry", archived=archived)
 
     @app.post("/api/projects", status_code=201)
     def create_project(payload: ProjectCreate):
         return store().create_project(**payload.model_dump())
 
+    @app.post("/api/projects/{project_id}/archive")
+    def archive_project(project_id: str, payload: ProjectState):
+        return store().archive_project(project_id, payload.expected_state)
+
+    @app.post("/api/projects/{project_id}/restore")
+    def restore_project(project_id: str, payload: ProjectState):
+        return store().restore_project(project_id, payload.expected_state)
+
     @app.get("/api/threads")
-    def threads(project_id: str | None = None, unread_only: bool = False, limit: int = Query(200, ge=1, le=1000)):
-        return store().list_threads("Barry", project_id, unread_only, limit)
+    def threads(project_id: str | None = None, unread_only: bool = False, limit: int = Query(200, ge=1, le=1000), archived: bool = False):
+        return store().list_threads("Barry", project_id, unread_only, limit, archived=archived)
 
     @app.post("/api/threads", status_code=201)
     def create_thread(payload: ThreadCreate):
         return store().create_thread("Barry", **payload.model_dump())
 
     @app.get("/api/threads/{thread_id}")
-    def read_thread(thread_id: int, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), max_bytes: int = Query(200_000, ge=1_000, le=10_000_000), mode: str = "oldest", before: int | None = Query(None, ge=1)):
-        return store().read_thread("Barry", thread_id, after, limit, max_bytes, mode=mode, before=before)
+    def read_thread(thread_id: int, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), max_bytes: int = Query(200_000, ge=1_000, le=10_000_000), mode: str = "oldest", before: int | None = Query(None, ge=1), archived: bool = False):
+        return store().read_thread("Barry", thread_id, after, limit, max_bytes, mode=mode, before=before, archived=archived)
 
     @app.get("/api/messages/{message_id}")
-    def get_message(message_id: int):
-        return store().get_message("Barry", message_id)
+    def get_message(message_id: int, archived: bool = False):
+        return store().get_message("Barry", message_id, archived=archived)
 
     @app.post("/api/threads/{thread_id}/messages", status_code=201)
     def post_message(thread_id: int, payload: MessageCreate):
@@ -130,12 +142,12 @@ def create_app(data_dir=None, dist_dir=None):
         return store().set_thread_status("Barry", thread_id, payload.status)
 
     @app.get("/api/search")
-    def search(q: str, project_id: str | None = None, limit: int = Query(100, ge=1, le=500), thread_id: int | None = Query(None, ge=1), before: int | None = Query(None, ge=1)):
-        return store().search_messages("Barry", q, project_id, limit, thread_id=thread_id, before=before)
+    def search(q: str, project_id: str | None = None, limit: int = Query(100, ge=1, le=500), thread_id: int | None = Query(None, ge=1), before: int | None = Query(None, ge=1), archived: bool = False):
+        return store().search_messages("Barry", q, project_id, limit, thread_id=thread_id, before=before, archived=archived)
 
     @app.get("/api/threads/{thread_id}/export", response_class=PlainTextResponse)
-    def export(thread_id: int):
-        return PlainTextResponse(store().export_thread("Barry", thread_id), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
+    def export(thread_id: int, archived: bool = False):
+        return PlainTextResponse(store().export_thread("Barry", thread_id, archived=archived), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
 
     @app.get("/api/{path:path}")
     def unknown_api(path: str):

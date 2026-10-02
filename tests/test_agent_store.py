@@ -112,8 +112,8 @@ def test_updates_metadata_and_upper_bound_share_transaction_snapshot(board, monk
     original = board._thread
     arrivals = []
 
-    def read_then_arrive(con, thread_id, author):
-        result = original(con, thread_id, author)
+    def read_then_arrive(con, thread_id, author, **kwargs):
+        result = original(con, thread_id, author, **kwargs)
         with ThreadPoolExecutor(max_workers=1) as pool:
             arrivals.append(pool.submit(board.post_message, "Barry", a, "Concurrent arrival").result())
         return result

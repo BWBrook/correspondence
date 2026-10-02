@@ -109,6 +109,9 @@ def test_legacy_request_fingerprints_upgrade_once(tmp_path):
     with board.connect(write=True) as con:
         con.execute("UPDATE requests SET fingerprint=? WHERE request_id='old-thread'", (legacy(["demo", "Old", "Opening", "note", "GPT-6 Astra"]),))
         con.execute("UPDATE requests SET fingerprint=? WHERE request_id='old-reply'", (legacy([first, "Reply", "note", 1, "Fable 5.1"]),))
+        con.execute("ALTER TABLE projects DROP COLUMN archived_at")
+        con.execute("ALTER TABLE projects DROP COLUMN archived_original_id")
+        con.execute("ALTER TABLE projects DROP COLUMN state_token")
         con.execute("PRAGMA user_version=0")
     upgraded = Store(tmp_path)
     assert upgraded.create_thread("Astra", "demo", "Old", "Opening", model=None, request_id="old-thread")["id"] == first
@@ -116,7 +119,7 @@ def test_legacy_request_fingerprints_upgrade_once(tmp_path):
     with pytest.raises(Conflict):
         upgraded.post_message("Fable", first, "Changed", parent_id=1, request_id="old-reply")
     with upgraded.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_first_message_and_body_whitespace(board):
@@ -240,8 +243,8 @@ def test_read_snapshot_and_explicit_whole_thread_acknowledgement(board, monkeypa
     original = board._thread
     arrived = []
 
-    def race_after_metadata(con, requested_thread, author):
-        metadata = original(con, requested_thread, author)
+    def race_after_metadata(con, requested_thread, author, **kwargs):
+        metadata = original(con, requested_thread, author, **kwargs)
         if not arrived:
             arrived.append(board.post_message("Astra", thread_id, "Arrived after snapshot began"))
         return metadata
@@ -304,8 +307,8 @@ def test_acknowledgement_maps_share_message_snapshot(board, monkeypatch):
     original = board._thread
     changed = []
 
-    def change_after_metadata(con, thread_id, author):
-        snapshot = original(con, thread_id, author)
+    def change_after_metadata(con, thread_id, author, **kwargs):
+        snapshot = original(con, thread_id, author, **kwargs)
         if not changed:
             changed.append(True)
             board.mark_read("Astra", first, last["id"])

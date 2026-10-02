@@ -22,7 +22,7 @@ export function ThreadReader({
   onSearch,
   onRefresh,
 }) {
-  const { threadId } = route;
+  const { threadId, archived } = route;
   const [detail, setDetail] = useState(null);
   const [quickReply, setQuickReply] = useState(null);
   const [loading, setLoading] = useState(false),
@@ -116,7 +116,7 @@ export function ThreadReader({
     setError("");
     try {
       if (messageId) {
-        const exact = await api(`/messages/${messageId}`, {
+        const exact = await api(`/messages/${messageId}?archived=${archived}`, {
           signal: abort.signal,
         });
         if (exact.message.thread_id !== threadId)
@@ -126,7 +126,7 @@ export function ThreadReader({
         after = messageId - 1;
         mode = "oldest";
       }
-      const query = new URLSearchParams({ mode, after, limit: 50 });
+      const query = new URLSearchParams({ mode, after, limit: 50, archived });
       if (before) query.set("before", before);
       const result = await api(`/threads/${threadId}?${query}`, {
         signal: abort.signal,
@@ -180,8 +180,10 @@ export function ThreadReader({
         mounted.current &&
         sequence === request.current &&
         e.name !== "AbortError"
-      )
+      ) {
+        if (e.status === 404) setDetail(null);
         setError(e.message);
+      }
     } finally {
       if (mounted.current && sequence === request.current) setLoading(false);
     }
@@ -208,7 +210,7 @@ export function ThreadReader({
   }, [route]);
 
   async function acknowledge(messageId, wholeThread = false) {
-    if (busy || !messageId) return;
+    if (archived || busy || !messageId) return;
     setBusy(true);
     setError("");
     try {
@@ -240,6 +242,7 @@ export function ThreadReader({
   }
 
   async function changeStatus() {
+    if (archived) return;
     const next = detail.thread.status === "resolved" ? "open" : "resolved";
     if (
       !confirm(
@@ -309,23 +312,31 @@ export function ThreadReader({
               <button className="text-button" onClick={onSearch}>
                 <Search size={16} /> Search
               </button>
-              <button
-                className="text-button status-toggle"
-                disabled={locked}
-                onClick={changeStatus}
-              >
-                {thread.status === "resolved"
-                  ? "Resolved · Reopen"
-                  : "Open · Resolve"}
-              </button>
+              {!archived && (
+                <button
+                  className="text-button status-toggle"
+                  disabled={locked}
+                  onClick={changeStatus}
+                >
+                  {thread.status === "resolved"
+                    ? "Resolved · Reopen"
+                    : "Open · Resolve"}
+                </button>
+              )}
               <a
-                href={`/api/threads/${threadId}/export`}
+                href={`/api/threads/${threadId}/export?archived=${archived}`}
                 download={`discussion-${threadId}.md`}
               >
                 <Download size={17} /> Export
               </a>
             </div>
           </header>
+          {archived && (
+            <p className="archive-banner">
+              Archived · Read-only. Restore this project from its discussion
+              list to continue writing.
+            </p>
+          )}
           <details className="read-state">
             <summary>Participant acknowledgements</summary>
             <p>
@@ -369,7 +380,7 @@ export function ThreadReader({
                 disabled={locked}
                 onClick={() => onNavigate({ mode: "latest" })}
               >
-                <ArrowDown size={16} /> Latest / Reply
+                <ArrowDown size={16} /> {archived ? "Latest" : "Latest / Reply"}
               </button>
               <button
                 className="icon"
@@ -386,14 +397,16 @@ export function ThreadReader({
               <span>
                 {unreadCount} unread · {thread.message_count} messages
               </span>
-              <button
-                className="text-button"
-                disabled={locked || !unreadCount}
-                title={`Includes all messages through #${latestId}, even those not displayed`}
-                onClick={() => acknowledge(latestId, true)}
-              >
-                <Check size={16} /> Mark thread read
-              </button>
+              {!archived && (
+                <button
+                  className="text-button"
+                  disabled={locked || !unreadCount}
+                  title={`Includes all messages through #${latestId}, even those not displayed`}
+                  onClick={() => acknowledge(latestId, true)}
+                >
+                  <Check size={16} /> Mark thread read
+                </button>
+              )}
             </div>
             <div className="reader-notice" role="status">
               {loading ? "Loading messages…" : busy ? "Saving…" : notice}
@@ -432,6 +445,7 @@ export function ThreadReader({
                 )}
                 <Message
                   message={m}
+                  archived={archived}
                   messages={detail.messages}
                   onReply={setReplyTo}
                   onQuickReply={(message, action) =>
@@ -440,7 +454,7 @@ export function ThreadReader({
                   highlighted={highlight === m.id}
                   onNavigate={(id) => onNavigate({ messageId: id })}
                   onMarkRead={
-                    m.id > thread.last_read_message_id
+                    !archived && m.id > thread.last_read_message_id
                       ? () => acknowledge(m.id)
                       : null
                   }
@@ -460,27 +474,29 @@ export function ThreadReader({
               Load newer messages
             </button>
           )}
-          <Composer
-            threadId={threadId}
-            replyTo={replyTo}
-            clearReply={() => setReplyTo(null)}
-            onPosting={() => ({
-              route: routeRef.current,
-              request: request.current,
-            })}
-            onPosted={(message, context) => {
-              if (!mounted.current) return;
-              if (
-                routeRef.current === context.route &&
-                request.current === context.request
-              )
-                onNavigate({ messageId: message.id });
-              onRefresh().catch((e) => {
-                if (mounted.current) setError(e.message);
-              });
-            }}
-          />
-          {quickReply && (
+          {!archived && (
+            <Composer
+              threadId={threadId}
+              replyTo={replyTo}
+              clearReply={() => setReplyTo(null)}
+              onPosting={() => ({
+                route: routeRef.current,
+                request: request.current,
+              })}
+              onPosted={(message, context) => {
+                if (!mounted.current) return;
+                if (
+                  routeRef.current === context.route &&
+                  request.current === context.request
+                )
+                  onNavigate({ messageId: message.id });
+                onRefresh().catch((e) => {
+                  if (mounted.current) setError(e.message);
+                });
+              }}
+            />
+          )}
+          {!archived && quickReply && (
             <QuickReply
               {...quickReply}
               close={() => setQuickReply(null)}

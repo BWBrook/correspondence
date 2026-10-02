@@ -9,6 +9,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 AUTHORS = {"Barry", "Astra", "Fable"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
@@ -84,20 +85,28 @@ class Store:
 
     @classmethod
     def _upgrade(cls, con):
-        # Version 1 dropped the model label from request fingerprints; recompute stored hashes once.
-        if con.execute("PRAGMA user_version").fetchone()[0] >= 1:
-            return
+        # Lock before checking the version: concurrent server startups must not
+        # both run ALTER TABLE, or recompute fingerprints after a project rekey.
         con.execute("BEGIN IMMEDIATE")
-        for row in con.execute("SELECT rowid, operation, result_id FROM requests").fetchall():
-            if row["operation"] == "post_message":
-                m = con.execute("SELECT thread_id, body, kind, parent_id FROM messages WHERE id=?", (row["result_id"],)).fetchone()
-                payload = [m["thread_id"], m["body"], m["kind"], m["parent_id"]]
-            else:
-                t = con.execute("SELECT project_id, title FROM threads WHERE id=?", (row["result_id"],)).fetchone()
-                m = con.execute("SELECT body, kind FROM messages WHERE thread_id=? ORDER BY id LIMIT 1", (row["result_id"],)).fetchone()
-                payload = [t["project_id"], t["title"], m["body"], m["kind"]]
-            con.execute("UPDATE requests SET fingerprint=? WHERE rowid=?", (cls._fingerprint(payload), row["rowid"]))
-        con.execute("PRAGMA user_version=1")
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
+            for row in con.execute("SELECT rowid, operation, result_id FROM requests").fetchall():
+                if row["operation"] == "post_message":
+                    m = con.execute("SELECT thread_id, body, kind, parent_id FROM messages WHERE id=?", (row["result_id"],)).fetchone()
+                    payload = [m["thread_id"], m["body"], m["kind"], m["parent_id"]]
+                else:
+                    t = con.execute("SELECT project_id, title FROM threads WHERE id=?", (row["result_id"],)).fetchone()
+                    m = con.execute("SELECT body, kind FROM messages WHERE thread_id=? ORDER BY id LIMIT 1", (row["result_id"],)).fetchone()
+                    payload = [t["project_id"], t["title"], m["body"], m["kind"]]
+                con.execute("UPDATE requests SET fingerprint=? WHERE rowid=?", (cls._fingerprint(payload), row["rowid"]))
+        if version < 2:
+            con.execute("ALTER TABLE projects ADD COLUMN archived_at TEXT")
+            con.execute("ALTER TABLE projects ADD COLUMN archived_original_id TEXT")
+        if version < 3:
+            con.execute("ALTER TABLE projects ADD COLUMN state_token TEXT")
+            for row in con.execute("SELECT id FROM projects").fetchall():
+                con.execute("UPDATE projects SET state_token=? WHERE id=?", (uuid4().hex, row["id"]))
+            con.execute("PRAGMA user_version=3")
         con.commit()
 
     @contextmanager
@@ -199,9 +208,83 @@ class Store:
         return list(records.values())
 
     @staticmethod
-    def _thread(con, thread_id, author):
-        thread = Store._require(con, "threads", thread_id)
+    def _thread(con, thread_id, author, *, archived=False):
+        thread = Store._visible_thread(con, thread_id, archived=archived)
         return Store._thread_records(con, [thread], author)[0]
+
+    @staticmethod
+    def _visible_thread(con, thread_id, *, archived=False):
+        thread = Store._require(con, "threads", thread_id)
+        Store._project(con, thread["project_id"], archived=archived)
+        return thread
+
+    @staticmethod
+    def _archive_flag(archived):
+        if type(archived) is not bool:
+            raise ValueError("archived must be boolean")
+        return archived
+
+    @staticmethod
+    def _project(con, project_id, *, archived=False):
+        Store._archive_flag(archived)
+        project = Store._require(con, "projects", project_id)
+        if (project["archived_at"] is not None) != archived:
+            raise NotFound("Not found")
+        return project
+
+    @staticmethod
+    def _rekey_project(con, old_id, new_id):
+        # Both references change atomically; deferred FK checking occurs at commit.
+        con.execute("PRAGMA defer_foreign_keys=ON")
+        con.execute("UPDATE projects SET id=? WHERE id=?", (new_id, old_id))
+        con.execute("UPDATE threads SET project_id=? WHERE project_id=?", (new_id, old_id))
+
+    @staticmethod
+    def _project_state(con, project_id, expected_state):
+        project = Store._require(con, "projects", project_id)
+        if not isinstance(expected_state, str) or project["state_token"] != expected_state:
+            raise Conflict("Project state changed; refresh before trying again")
+        return project
+
+    def archive_project(self, project_id, expected_state: str):
+        """Preserve a section under a new archival key, freeing its active slug."""
+        with self.connect(write=True) as con:
+            project = self._project_state(con, project_id, expected_state)
+            if project["archived_at"] is not None:
+                raise Conflict("Project state changed; refresh before trying again")
+            number = 2
+            while True:
+                suffix = f"-archived-{number}"
+                archive_id = project_id[:100-len(suffix)].rstrip("-") + suffix
+                if not con.execute("SELECT 1 FROM projects WHERE id=?", (archive_id,)).fetchone():
+                    break
+                number += 1
+            self._rekey_project(con, project_id, archive_id)
+            con.execute("UPDATE projects SET archived_at=?,archived_original_id=?,state_token=? WHERE id=?",
+                        (now(), project_id, uuid4().hex, archive_id))
+            return self._require(con, "projects", archive_id)
+
+    def restore_project(self, project_id, expected_state: str):
+        """Restore without overwriting active projects or reusing their display names."""
+        with self.connect(write=True) as con:
+            project = self._project_state(con, project_id, expected_state)
+            if project["archived_at"] is None:
+                raise Conflict("Project state changed; refresh before trying again")
+            original = project["archived_original_id"]
+            restored_id, number = original, 2
+            while con.execute("SELECT 1 FROM projects WHERE id=? AND id!=?", (restored_id, project_id)).fetchone():
+                suffix = f"-restored-{number}"
+                restored_id = original[:100-len(suffix)].rstrip("-") + suffix
+                number += 1
+            name, number = project["name"], 2
+            while con.execute("SELECT 1 FROM projects WHERE name=? COLLATE NOCASE AND archived_at IS NULL AND id!=?",
+                              (name, project_id)).fetchone():
+                suffix = f" (restored {number})"
+                name = project["name"][:200-len(suffix)] + suffix
+                number += 1
+            self._rekey_project(con, project_id, restored_id)
+            con.execute("UPDATE projects SET name=?,archived_at=NULL,archived_original_id=NULL,state_token=? WHERE id=?", (name, uuid4().hex, restored_id))
+            return self._require(con, "projects", restored_id)
 
     def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None):
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", id) or len(id) > 100:
@@ -214,19 +297,21 @@ class Store:
         with self.connect(write=True) as con:
             existing = con.execute("SELECT * FROM projects WHERE id=?", (id,)).fetchone()
             if existing:
+                self._project(con, id)
                 if (existing["name"], existing["description"], existing["repo_path"]) != (name, description, repo_path):
                     raise Conflict("Project slug already exists with different details")
                 return dict(existing)
-            con.execute("INSERT INTO projects VALUES (?,?,?,?,?)", (id, name, description, repo_path, now()))
+            con.execute("INSERT INTO projects(id,name,description,repo_path,created_at,state_token) VALUES (?,?,?,?,?,?)", (id, name, description, repo_path, now(), uuid4().hex))
             return self._require(con, "projects", id)
 
-    def list_projects(self, author):
+    def list_projects(self, author, *, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         with self.connect() as con:
             projects = [dict(row, unread_counts={name: 0 for name in ("Barry", "Astra", "Fable")})
                         for row in con.execute("""SELECT p.*,
                             (SELECT MAX(t.updated_at) FROM threads t WHERE t.project_id=p.id) last_activity_at
-                            FROM projects p ORDER BY p.name COLLATE NOCASE, p.id LIMIT 1000""")]
+                            FROM projects p WHERE (p.archived_at IS NOT NULL)=? ORDER BY p.name COLLATE NOCASE, p.id LIMIT 1000""", (archived,))]
             if not projects:
                 return []
             by_id = {project["id"]: project for project in projects}
@@ -243,16 +328,17 @@ class Store:
                 project["unread_count"] = project["unread_counts"][author]
             return projects
 
-    def list_threads(self, author, project_id=None, unread_only=False, limit=200):
+    def list_threads(self, author, project_id=None, unread_only=False, limit=200, *, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
         with self.connect() as con:
-            rows = con.execute("""SELECT t.* FROM threads t WHERE (? IS NULL OR t.project_id=?)
+            rows = con.execute("""SELECT t.* FROM threads t JOIN projects p ON p.id=t.project_id WHERE (p.archived_at IS NOT NULL)=? AND (? IS NULL OR t.project_id=?)
                 AND (?=0 OR EXISTS (SELECT 1 FROM messages m LEFT JOIN read_markers r
                 ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author!=?
                 AND m.id>COALESCE(r.message_id,0))) ORDER BY t.updated_at DESC, t.id DESC LIMIT ?""",
-                (project_id, project_id, unread_only, author, author, limit)).fetchall()
+                (archived, project_id, project_id, unread_only, author, author, limit)).fetchall()
             return self._thread_records(con, [dict(row) for row in rows], author)
 
     def create_thread(self, author, project_id, title, body, kind="note", model=None, request_id=None):
@@ -263,14 +349,15 @@ class Store:
             result_id = self._request(con, author, request_id, "create_thread", payload)
             if result_id is not None:
                 return self._thread(con, result_id, author)
-            self._require(con, "projects", project_id)
+            self._project(con, project_id)
             timestamp = now()
             result_id = con.execute("INSERT INTO threads(project_id,title,created_at,updated_at) VALUES (?,?,?,?)", (project_id,title,timestamp,timestamp)).lastrowid
             self._insert_message(con, result_id, author, model, body, kind)
             self._request(con, author, request_id, "create_thread", payload, result_id)
             return self._thread(con, result_id, author)
 
-    def read_thread(self, author, thread_id, after=0, limit=100, max_bytes=200_000, *, mode="oldest", before=None):
+    def read_thread(self, author, thread_id, after=0, limit=100, max_bytes=200_000, *, mode="oldest", before=None, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         if after < 0 or not 1 <= limit <= 500:
             raise ValueError("after must be nonnegative; limit must be between 1 and 500")
@@ -283,7 +370,7 @@ class Store:
         if (before is not None and after != 0) or (mode != "oldest" and (after != 0 or before is not None)):
             raise ValueError("Use either after, before, or a latest/unread mode, not a combination")
         with self.connect() as con:
-            thread = self._thread(con, thread_id, author)
+            thread = self._thread(con, thread_id, author, archived=archived)
             if mode == "unread":
                 first_unread = thread["first_unread_message_id"]
                 if first_unread is None:
@@ -315,20 +402,21 @@ class Store:
                     "has_before": bool(rows and thread["first_message_id"] < first),
                     "previous_before": first}
 
-    def get_message(self, author, message_id):
+    def get_message(self, author, message_id, *, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         with self.connect() as con:
             message = self._require(con, "messages", message_id)
-            return {"thread": self._thread(con, message["thread_id"], author), "message": message}
+            return {"thread": self._thread(con, message["thread_id"], author, archived=archived), "message": message}
 
     def post_message(self, author, thread_id, body, kind="note", parent_id=None, model=None, request_id=None):
         body, model = self._message_args(author, body, kind, model)
         payload = [thread_id, body, kind, parent_id]
         with self.connect(write=True) as con:
+            self._visible_thread(con, thread_id)
             result_id = self._request(con, author, request_id, "post_message", payload)
             if result_id is not None:
                 return self._require(con, "messages", result_id)
-            self._require(con, "threads", thread_id)
             result_id = self._insert_message(con, thread_id, author, model, body, kind, parent_id)
             self._request(con, author, request_id, "post_message", payload, result_id)
             return self._require(con, "messages", result_id)
@@ -336,7 +424,7 @@ class Store:
     def mark_read(self, author, thread_id, message_id):
         author_name(author)
         with self.connect(write=True) as con:
-            self._require(con, "threads", thread_id)
+            self._visible_thread(con, thread_id)
             message = self._require(con, "messages", message_id)
             if message["thread_id"] != thread_id:
                 raise ValueError("Read marker must reference a message in this discussion")
@@ -353,8 +441,9 @@ class Store:
             # Query the board directly: project/thread listing limits must not apply.
             snapshots = con.execute("""SELECT m.thread_id, MAX(m.id) last_message_id,
                 SUM(m.id>COALESCE(r.message_id,0) AND m.author!=?) unread_count
-                FROM messages m LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
-                GROUP BY m.thread_id""", (author, author)).fetchall()
+                FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
+                LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
+                WHERE p.archived_at IS NULL GROUP BY m.thread_id""", (author, author)).fetchall()
             con.executemany("""INSERT INTO read_markers(author,thread_id,message_id) VALUES (?,?,?)
                 ON CONFLICT(author,thread_id) DO UPDATE
                 SET message_id=MAX(read_markers.message_id,excluded.message_id)""",
@@ -369,13 +458,14 @@ class Store:
         if model is not None:
             model = clean_text(model, "model", 200)
         with self.connect(write=True) as con:
-            thread = self._require(con, "threads", thread_id)
+            thread = self._visible_thread(con, thread_id)
             if thread["status"] != status:
                 con.execute("UPDATE threads SET status=? WHERE id=?", (status,thread_id))
                 self._insert_message(con, thread_id, author, model, f"Discussion status changed from {thread['status']} to {status}.", "note")
             return self._thread(con, thread_id, author)
 
-    def search_messages(self, author, q, project_id=None, limit=100, *, thread_id=None, before=None):
+    def search_messages(self, author, q, project_id=None, limit=100, *, thread_id=None, before=None, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         q = clean_text(q, "q", 500)
         if not 1 <= limit <= 500:
@@ -388,10 +478,10 @@ class Store:
             rows = con.execute("""SELECT m.id, m.thread_id, m.author, m.model, m.kind, m.parent_id, m.created_at, m.body,
                 t.title thread_title, t.project_id, p.name project_name
                 FROM messages m JOIN threads t ON m.thread_id=t.id JOIN projects p ON t.project_id=p.id
-                WHERE (m.body LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\')
+                WHERE (p.archived_at IS NOT NULL)=? AND (m.body LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\')
                 AND (? IS NULL OR t.project_id=?) AND (? IS NULL OR m.thread_id=?)
                 AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
-                (pattern,pattern,project_id,project_id,thread_id,thread_id,before,before,limit))
+                (archived,pattern,pattern,project_id,project_id,thread_id,thread_id,before,before,limit))
             return [self._snippet(dict(row), q) for row in rows]
 
     @staticmethod
@@ -458,13 +548,14 @@ class Store:
             raise ValueError("Require after <= through <= the current maximum message id")
         return through
 
-    def inbox(self, author, project_id=None, thread_id=None, after=0, through=None, limit=20, unread_only=False):
+    def inbox(self, author, project_id=None, thread_id=None, after=0, through=None, limit=20, unread_only=False, *, archived=False):
         """Compact chronological updates in (after, through]; unread_only is live triage, not durable synchronization.
 
         total counts this request's remaining matching interval. Exhausted pages
         advance next_after to through, including empty/filtered gaps. returned_bytes
         measures the UTF-8 compact JSON items array. No acknowledgement is changed.
         """
+        self._archive_flag(archived)
         author_name(author)
         self._agent_options(project_id, thread_id, limit)
         if type(unread_only) is not bool:
@@ -473,10 +564,10 @@ class Store:
             through = self._snapshot_bound(con, after, through)
             where = """FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
                 LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
-                WHERE m.id>? AND m.id<=? AND (? IS NULL OR t.project_id=?)
+                WHERE (p.archived_at IS NOT NULL)=? AND m.id>? AND m.id<=? AND (? IS NULL OR t.project_id=?)
                 AND (? IS NULL OR m.thread_id=?)
                 AND (?=0 OR (m.id>COALESCE(r.message_id,0) AND m.author!=?))"""
-            parameters = (author, after, through, project_id, project_id, thread_id, thread_id, unread_only, author)
+            parameters = (author, archived, after, through, project_id, project_id, thread_id, thread_id, unread_only, author)
             total = con.execute("SELECT COUNT(*) " + where, parameters).fetchone()[0]
             rows = con.execute("SELECT m.*,t.project_id,t.title thread_title,p.name project_name " + where + " ORDER BY m.id LIMIT ?", (*parameters, limit))
             items = [self._snippet(dict(row), "") for row in rows]
@@ -485,7 +576,7 @@ class Store:
                     "next_after": items[-1]["id"] if has_more else through,
                     "through": through, "total": total, "returned_bytes": self._items_bytes(items)}
 
-    def read_updates(self, author, thread_id, after=None, through=None, limit=20, max_bytes=25000):
+    def read_updates(self, author, thread_id, after=None, through=None, limit=20, max_bytes=25000, *, archived=False):
         """Read full updates without a latest-page fallback or implicit acknowledgement.
 
         after=None starts at the participant's marker; explicit after ignores it.
@@ -493,12 +584,13 @@ class Store:
         acknowledgement IDs. The byte budget counts the UTF-8 JSON messages array.
         One oversized first message is returned whole and explicitly flagged.
         """
+        self._archive_flag(archived)
         author_name(author)
         self._agent_options(thread_id=thread_id, limit=limit, max_bytes=max_bytes)
         self._agent_id(thread_id, "thread_id")
         self._agent_id(after, "after", optional=True, zero=True)
         with self.connect() as con:
-            thread = self._thread(con, thread_id, author)
+            thread = self._thread(con, thread_id, author, archived=archived)
             if after is None:
                 after = thread["last_read_message_id"]
             through = self._snapshot_bound(con, after, through)
@@ -509,8 +601,9 @@ class Store:
                     "next_after": messages[-1]["id"] if has_more else through,
                     "through": through, "returned_bytes": size, "oversized": oversized}
 
-    def get_messages(self, author, message_ids, include_parents=False, max_bytes=25000):
+    def get_messages(self, author, message_ids, include_parents=False, max_bytes=25000, *, archived=False):
         """Read requested IDs in request order, then unique direct parents; expose all missing/omitted IDs."""
+        self._archive_flag(archived)
         author_name(author)
         self._agent_options(max_bytes=max_bytes)
         if not isinstance(message_ids, (list, tuple)) or not 1 <= len(message_ids) <= 50:
@@ -525,8 +618,8 @@ class Store:
                 if not ids:
                     return {}
                 rows = con.execute(f"""SELECT m.*,t.project_id,t.title thread_title
-                    FROM messages m JOIN threads t ON t.id=m.thread_id
-                    WHERE m.id IN ({','.join('?' for _ in ids)})""", ids)
+                    FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
+                    WHERE (p.archived_at IS NOT NULL)=? AND m.id IN ({','.join('?' for _ in ids)})""", (archived, *ids))
                 return {row["id"]: dict(row) for row in rows}
 
             found = fetch(requested)
@@ -545,8 +638,9 @@ class Store:
                     "returned_bytes": size, "oversized": oversized}
 
     def search_messages_page(self, author, q, project_id=None, thread_id=None, author_filter=None,
-                             kind=None, since=None, after=0, before=None, limit=20):
+                             kind=None, since=None, after=0, before=None, limit=20, *, archived=False):
         """Search body text only; scope/filter intersections and descending immutable-ID pages."""
+        self._archive_flag(archived)
         author_name(author)
         self._agent_options(project_id, thread_id, limit)
         self._agent_id(after, "after", zero=True)
@@ -567,11 +661,11 @@ class Store:
         with self.connect() as con:
             rows = con.execute("""SELECT m.*,t.project_id,t.title thread_title,p.name project_name
                 FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
-                WHERE m.body LIKE ? ESCAPE '\\' AND (? IS NULL OR t.project_id=?)
+                WHERE (p.archived_at IS NOT NULL)=? AND m.body LIKE ? ESCAPE '\\' AND (? IS NULL OR t.project_id=?)
                 AND (? IS NULL OR m.thread_id=?) AND (? IS NULL OR m.author=?)
                 AND (? IS NULL OR m.kind=?) AND (? IS NULL OR m.created_at>=?)
                 AND m.id>? AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
-                (self._literal_pattern(q), project_id, project_id, thread_id, thread_id,
+                (archived, self._literal_pattern(q), project_id, project_id, thread_id, thread_id,
                  author_filter, author_filter, kind, kind, since, since, after, before, before, limit + 1)).fetchall()
             items = [self._snippet(dict(row), q) for row in rows[:limit]]
             return {"items": items, "has_more": len(rows) > limit,
@@ -584,7 +678,8 @@ class Store:
                   "read_markers", "unread_counts", "last_author")
         return {field: record[field] for field in fields}
 
-    def _threads_page(self, author, project_id, unread_only, limit, before, q=None):
+    def _threads_page(self, author, project_id, unread_only, limit, before, q=None, *, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         self._agent_options(project_id, limit=limit, thread_page=True)
         self._agent_id(before, "before", optional=True)
@@ -592,30 +687,31 @@ class Store:
             raise ValueError("unread_only must be boolean")
         pattern = None if q is None else self._literal_pattern(clean_text(q, "q", 500))
         with self.connect() as con:
-            rows = con.execute("""SELECT t.* FROM threads t
-                WHERE (? IS NULL OR t.project_id=?) AND (? IS NULL OR t.id<?)
+            rows = con.execute("""SELECT t.* FROM threads t JOIN projects p ON p.id=t.project_id
+                WHERE (p.archived_at IS NOT NULL)=? AND (? IS NULL OR t.project_id=?) AND (? IS NULL OR t.id<?)
                 AND (? IS NULL OR t.title LIKE ? ESCAPE '\\')
                 AND (?=0 OR EXISTS (SELECT 1 FROM messages m LEFT JOIN read_markers r
                     ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author!=?
                     AND m.id>COALESCE(r.message_id,0))) ORDER BY t.id DESC LIMIT ?""",
-                (project_id, project_id, before, before, pattern, pattern, unread_only, author, author, limit + 1)).fetchall()
+                (archived, project_id, project_id, before, before, pattern, pattern, unread_only, author, author, limit + 1)).fetchall()
             items = [self._compact_thread(record) for record in self._thread_records(con, [dict(row) for row in rows[:limit]], author)]
             return {"items": items, "has_more": len(rows) > limit,
                     "next_before": items[-1]["id"] if items else before}
 
-    def search_threads(self, author, q, project_id=None, before=None, limit=20):
+    def search_threads(self, author, q, project_id=None, before=None, limit=20, *, archived=False):
         """Search titles once per discussion; activity changes do not move ID cursors."""
-        return self._threads_page(author, project_id, False, limit, before, q)
+        return self._threads_page(author, project_id, False, limit, before, q, archived=archived)
 
-    def list_threads_page(self, author, project_id=None, unread_only=False, limit=50, before=None):
+    def list_threads_page(self, author, project_id=None, unread_only=False, limit=50, before=None, *, archived=False):
         """Enumerate discussions by descending immutable ID, with explicit continuation."""
-        return self._threads_page(author, project_id, unread_only, limit, before)
+        return self._threads_page(author, project_id, unread_only, limit, before, archived=archived)
 
-    def export_thread(self, author, thread_id):
+    def export_thread(self, author, thread_id, *, archived=False):
+        self._archive_flag(archived)
         author_name(author)
         with self.connect() as con:
             thread = self._require(con, "threads", thread_id)
-            project = self._require(con, "projects", thread["project_id"])
+            project = self._project(con, thread["project_id"], archived=archived)
             messages = [dict(row) for row in con.execute("SELECT * FROM messages WHERE thread_id=? ORDER BY id", (thread_id,))]
         # Keep message text verbatim; generated metadata is flattened to protect structure.
         flat = lambda text: str(text).replace("\n", " ").replace("\r", " ")

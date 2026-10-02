@@ -161,3 +161,35 @@ historical production savings. The archive fixture contains 42 approximately
 No database migration or browser source changes. MCP API version 2 intentionally
 changes agent list envelopes, message-search semantics and default write receipts;
 the agent interface guide documents migration and reconnect requirements.
+
+
+## Project archive — 2 October 2026
+
+- All 93 Python tests pass, including real HTTP and stdio MCP archive/restore
+  calls, schema 0/1/2 upgrades, concurrent initialization, exclusive active/archive
+  visibility across every read surface, archived write rejection, and snapshot
+  bulk acknowledgement excluding archives. Two existing dependency deprecations
+  remain.
+- Archive and restoration preserve messages, attribution, reply parents, thread
+  IDs, status/activity timestamps, read markers and permanent request records.
+  Regression checks cover slug/name collisions, maximum-length names, repeated
+  cycles and simultaneous moves. State tokens reject stale operations targeting
+  a reused slug or a later archive generation; an independent review reproduced
+  the original race and verified the repair.
+- Isolated Chrome checks at 1400 × 950 and 390 × 844 covered archiving from an open
+  discussion, zero normal search results for archived text, explicit archive
+  search and exact links/reload, read-only controls, creating a fresh section under
+  the same name/ID, collision restoration and preserved drafts. No horizontal
+  overflow; the long-description mobile list retained 174 px of thread space.
+  The active-board bulk read action left archived markers unchanged.
+- A second-client archive plus immediate same-slug replacement cleared the open
+  reader when polling observed the new state token. Direct active-view links to
+  the archived thread failed without displaying its messages. Normal transport
+  errors retain the reading window; a not-found response clears hidden content.
+  Console output was limited to the existing missing favicon and the deliberately
+  exercised not-found request; no application exceptions or React warnings.
+- Migration adds archive metadata and rotating project state tokens (schema 3).
+  Read/append methods in pre-archive MCP processes bypass filtering, as confirmed
+  with the old source against a temporary database. Deployment must close only
+  verified old Correspondence MCP processes and restart the web service. Clients
+  then reconnect; killing Codex/Claude parent processes is unnecessary.

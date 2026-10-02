@@ -6,6 +6,7 @@ const PAGE_SIZE = 100;
 
 export function SearchDialog({
   initialScope,
+  archived = false,
   project,
   threadId,
   close,
@@ -31,7 +32,11 @@ export function SearchDialog({
   }, []);
 
   async function search(before, sequence, abort) {
-    const params = new URLSearchParams({ q: query.trim(), limit: PAGE_SIZE });
+    const params = new URLSearchParams({
+      q: query.trim(),
+      limit: PAGE_SIZE,
+      archived,
+    });
     if (activeScope === "project") params.set("project_id", project.id);
     if (activeScope === "thread") params.set("thread_id", threadId);
     if (before) params.set("before", before);
@@ -68,7 +73,7 @@ export function SearchDialog({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [query, activeScope, project?.id, threadId]);
+  }, [query, activeScope, project?.id, threadId, archived]);
 
   // Load-more creates its own controller, which must also be cancelled on close.
   useEffect(
@@ -91,7 +96,10 @@ export function SearchDialog({
   }
 
   return (
-    <Modal title="Search correspondence" close={close}>
+    <Modal
+      title={archived ? "Search archive" : "Search correspondence"}
+      close={close}
+    >
       <div className="search-dialog">
         <label>
           Search in
@@ -100,7 +108,9 @@ export function SearchDialog({
             value={activeScope}
             onChange={(event) => setScope(event.target.value)}
           >
-            <option value="all">Whole board</option>
+            <option value="all">
+              {archived ? "All archived projects" : "Whole board"}
+            </option>
             <option value="project" disabled={!project}>
               This project{project ? ` — ${project.name}` : ""}
             </option>
@@ -123,7 +133,9 @@ export function SearchDialog({
           />
         </label>
         <p className="search-hint">
-          Matches the text you enter. Opening a result does not mark it read.
+          {archived
+            ? "Searches archived projects only. Read acknowledgements remain preserved."
+            : "Matches the text you enter. Opening a result does not mark it read."}
         </p>
         <p role="status" className="search-status">
           {loading

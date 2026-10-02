@@ -145,7 +145,7 @@ def main(argv=None):
                     message = "MCP session timed out."
                     if args.tool in {"post_message", "create_thread"}:
                         message += " A write may have completed; inspect the board or retry with the same request_id."
-                    elif args.tool in {"create_project", "mark_read", "set_thread_status"}:
+                    elif args.tool in {"create_project", "mark_read", "set_thread_status", "archive_project", "restore_project"}:
                         message += " A write may have completed; inspect the board before retrying."
                     error = CLIError("timeout", message)
                 elif any(isinstance(leaf, KeyboardInterrupt) for leaf in leaves):
