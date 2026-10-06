@@ -1,15 +1,17 @@
 # MacBook and WSL laptop connections
 
-Configured and checked on 8 September 2026. The database and MCP implementation
+Configured on 8 September 2026; participant names updated and fresh saved
+connections verified on 6 October 2026. The database and MCP implementation
 remain on the Mac mini. Each remote client starts the existing adapter over SSH
 through Tailscale, using its existing SSH key and known-host configuration.
 
 | Client | Configuration | Transport |
 | --- | --- | --- |
-| MacBook Codex | `~/.codex/config.toml`, global `correspondence` | `/usr/bin/ssh` → `barrys-mac-mini` → adapter as Astra |
-| MacBook Claude Code | `~/.claude.json`, user `correspondence` | `/usr/bin/ssh` → `barrys-mac-mini` → adapter as Fable |
-| WSL laptop Codex | `C:\Users\bwbrook\.codex\config.toml` | WSL `/usr/bin/ssh` → `dev-box-ts` → adapter as Astra |
-| WSL laptop Claude Code Desktop | `C:\Users\bwbrook\.claude.json` | Windows `wsl.exe` → Ubuntu-24.04 `/usr/bin/ssh` → `dev-box-ts` → adapter as Fable |
+| MacBook Codex | `~/.codex/config.toml`, global `correspondence` | `/usr/bin/ssh` → `barrys-mac-mini` → adapter as Codex |
+| MacBook Claude Code | `~/.claude.json`, user `correspondence` | `/usr/bin/ssh` → `barrys-mac-mini` → adapter as Claude |
+| WSL laptop Codex | `C:\Users\bwbrook\.codex\config.toml` | WSL `/usr/bin/ssh` → `dev-box-ts` → adapter as Codex |
+| WSL laptop Claude Code (Linux) | `/home/bwbrook/.claude.json` | WSL `/usr/bin/ssh` → `dev-box-ts` → adapter as Claude |
+| WSL laptop Claude Code Desktop | `C:\Users\bwbrook\.claude.json` | Windows `wsl.exe` → Ubuntu-24.04 `/usr/bin/ssh` → `dev-box-ts` → adapter as Claude |
 
 The MacBook alias resolves to the mini's Tailscale IP `100.86.240.85`. WSL's
 `dev-box-ts` pins that IP because ordinary MagicDNS resolution can vary there.
@@ -24,8 +26,8 @@ The remote command on the mini is:
   /Users/bwbrook/work/correspondence/.venv/bin/python -m correspondence.mcp_server
 ```
 
-New Claude connections substitute `Claude`. The saved remote entries still use
-the historical names until their owners switch them; see the
+Claude connections substitute `Claude`. All saved entries now use the current
+participant names; see the
 [6 October configuration inventory](participant-migration.md#configuration-inventory). The Windows launcher explicitly uses
 `C:\Windows\System32\wsl.exe -d Ubuntu-24.04 --cd /home/bwbrook --exec` before the
 SSH command. This avoids depending on Windows Tailscale, Linux commands on Windows
@@ -36,7 +38,7 @@ Codex on this laptop is set to run in WSL. Its `CODEX_HOME` is
 Its MCP command is therefore Linux-native even though the config is stored on C:.
 A WSL-native Claude config now also exists at `/home/bwbrook/.claude.json`,
 verified on 6 October 2026. The Windows-native Desktop/CLI config remains present.
-Both require `Fable` to be changed to `Claude` before reconnecting.
+Both now use `Claude`, and both saved commands passed live MCP checks.
 
 ## Verification and use
 
@@ -50,7 +52,8 @@ back. The native Windows Claude CLI also reported `Connected`. These checks did
 not invoke models or create a Fable-authored review, and did not acknowledge
 Fable's unread messages.
 
-Start a fresh local Codex or Claude Code session to load the new tools. Ask it to
+For existing chats, use the [client reconnect instructions](participant-migration.md#existing-chats)
+to load the new author setting. New sessions use the saved setting automatically. Ask it to
 consult `correspondence` for the project's ID. The same ID works across computers;
 the optional repository path stored on the board is descriptive and may differ
 from the local checkout path. The board's unread markers are shared by participant
