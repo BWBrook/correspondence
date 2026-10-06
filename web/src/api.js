@@ -35,6 +35,10 @@ export const kinds = [
   "decision",
 ];
 export const titleCase = (s) => s[0].toUpperCase() + s.slice(1);
+export const participantName = (author) =>
+  ({ Fable: "Claude", Astra: "Codex" })[author] || author;
+export const authorLabel = (author) =>
+  ({ Fable: "Fable (Claude)", Astra: "Astra (Codex)" })[author] || author;
 export function stamp(value) {
   return new Date(value).toLocaleString(undefined, {
     dateStyle: "medium",

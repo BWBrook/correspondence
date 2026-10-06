@@ -16,7 +16,7 @@ SCRIPT = ROOT / "scripts" / "mcp-call.py"
 
 @pytest.fixture
 def cli(tmp_path):
-    def call(*args, stdin=None, author="Astra"):
+    def call(*args, stdin=None, author="Codex"):
         process = subprocess.run(
             [sys.executable, str(SCRIPT), "--author", author, *args],
             input=stdin, text=True, capture_output=True, cwd=ROOT, timeout=15,
@@ -83,12 +83,12 @@ def test_file_and_stdin_body_keep_whitespace_and_request_retry(cli, tmp_path):
     result, _ = cli("get_message", json.dumps({"message_id": thread["first_message_id"]}))
     assert result["result"]["message"]["body"] == body.rstrip()
     reply = {"thread_id": thread["id"], "request_id": "reply-retry"}
-    result, _ = cli("post_message", json.dumps(reply), "--body-file", "-", stdin=body, author="Fable")
-    repeated, _ = cli("post_message", json.dumps(reply), "--body-file", "-", stdin=body, author="Fable")
+    result, _ = cli("post_message", json.dumps(reply), "--body-file", "-", stdin=body, author="Claude")
+    repeated, _ = cli("post_message", json.dumps(reply), "--body-file", "-", stdin=body, author="Claude")
     assert repeated["result"]["id"] == result["result"]["id"]
     exact, _ = cli("get_message", json.dumps({"message_id": result["result"]["id"]}))
     assert exact["result"]["message"]["body"] == body.rstrip()
-    assert exact["result"]["message"]["author"] == "Fable"
+    assert exact["result"]["message"]["author"] == "Claude"
 
 
 @pytest.mark.parametrize("arguments", [

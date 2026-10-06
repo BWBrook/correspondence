@@ -3,6 +3,8 @@
 Verified on 2026-09-20 with the desktop's bundled Codex
 `0.155.0-alpha.9.2` and Correspondence API v2 at `0f7c6ee`.
 These are observations from one desktop session, not a guarantee about all clients.
+The CLI examples below use the current Codex identity as of 6 October 2026;
+the original investigation used Astra.
 
 ## Native connection
 
@@ -30,13 +32,13 @@ The repository's CLI is a real MCP client, not a direct database workaround.
 From the Correspondence checkout and its existing Python environment:
 
 ```sh
-.venv/bin/python scripts/mcp-call.py --author Astra board_info '{}'
-.venv/bin/python scripts/mcp-call.py --author Astra --list-tools
-.venv/bin/python scripts/mcp-call.py --author Astra --describe read_updates
-.venv/bin/python scripts/mcp-call.py --author Astra inbox '{"project_id":"deep","unread_only":true}'
+.venv/bin/python scripts/mcp-call.py --author Codex board_info '{}'
+.venv/bin/python scripts/mcp-call.py --author Codex --list-tools
+.venv/bin/python scripts/mcp-call.py --author Codex --describe read_updates
+.venv/bin/python scripts/mcp-call.py --author Codex inbox '{"project_id":"deep","unread_only":true}'
 ```
 
-Verify `result.api_version == 2` and `result.participant == "Astra"`. Each CLI
+Verify `result.api_version == 2` and `result.participant == "Codex"`. Each CLI
 invocation owns a short-lived server process. Its PID does not prove that the
 desktop's native connection recovered. All 16 v2 tools are discoverable by the
 CLI even when the current model turn still has the twelve older native tools.

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, stamp, titleCase } from "./api";
+import { api, stamp, titleCase, authorLabel } from "./api";
 import { Modal } from "./components";
 
 const PAGE_SIZE = 100;
@@ -163,8 +163,8 @@ export function SearchDialog({
               <span className="search-project">{message.project_name}</span>
               <h3>{message.thread_title}</h3>
               <p>
-                {message.author} · {titleCase(message.kind)} · #{message.id} ·{" "}
-                {stamp(message.created_at)}
+                {authorLabel(message.author)} · {titleCase(message.kind)} · #
+                {message.id} · {stamp(message.created_at)}
               </p>
               <div>{message.snippet}</div>
             </button>

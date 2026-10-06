@@ -19,10 +19,10 @@ from correspondence.web import create_app
 def board(tmp_path):
     store = Store(tmp_path)
     store.create_project("old", "Old", "Description", "/tmp/example")
-    store.create_thread("Astra", "old", "Review needle", "needle opening", request_id="creation")
-    store.post_message("Fable", 1, "needle reply", parent_id=1, model="Fable", request_id="reply")
+    store.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation")
+    store.post_message("Claude", 1, "needle reply", parent_id=1, model="Fable", request_id="reply")
     store.mark_read("Barry", 1, 1)
-    store.set_thread_status("Astra", 1, "resolved")
+    store.set_thread_status("Codex", 1, "resolved")
     return store
 
 
@@ -58,8 +58,8 @@ def test_archive_restore_preserves_contents_metadata_and_requests(board):
     assert restored["archived_original_id"] is None
     assert without_tokens(records(board)) == without_tokens(original)
     assert token(board, "old") != original["projects"][0]["state_token"]
-    assert board.create_thread("Astra", "old", "Review needle", "needle opening", request_id="creation")["id"] == 1
-    assert board.post_message("Fable", 1, "needle reply", parent_id=1, model="Other", request_id="reply")["id"] == 2
+    assert board.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation")["id"] == 1
+    assert board.post_message("Claude", 1, "needle reply", parent_id=1, model="Other", request_id="reply")["id"] == 2
     with board.connect() as con:
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
 
@@ -67,7 +67,7 @@ def test_archive_restore_preserves_contents_metadata_and_requests(board):
 def test_every_read_surface_selects_exact_archive_view(board):
     archive = board.archive_project("old", token(board, "old"))
     board.create_project("active", "Active")
-    active = board.create_thread("Astra", "active", "Review needle", "needle active")
+    active = board.create_thread("Codex", "active", "Review needle", "needle active")
     active_message = active["last_message_id"]
     lists = [lambda flag: board.list_projects("Barry", archived=flag),
              lambda flag: board.list_threads("Barry", archived=flag),
@@ -105,8 +105,8 @@ def test_archived_mutations_and_retries_fail_without_changing_state(board):
     before = records(board)
     writes = [lambda: board.create_project(archive["id"], "Old", "Description", "/tmp/example"),
               lambda: board.create_thread("Barry", archive["id"], "New", "Forbidden"),
-              lambda: board.create_thread("Astra", "old", "Review needle", "needle opening", request_id="creation"),
-              lambda: board.post_message("Fable", 1, "needle reply", parent_id=1, request_id="reply"),
+              lambda: board.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation"),
+              lambda: board.post_message("Claude", 1, "needle reply", parent_id=1, request_id="reply"),
               lambda: board.post_message("Barry", 1, "Forbidden"),
               lambda: board.mark_read("Barry", 1, 2),
               lambda: board.set_thread_status("Barry", 1, "resolved"),
@@ -121,7 +121,7 @@ def test_archived_mutations_and_retries_fail_without_changing_state(board):
     board.create_project("old", "Fresh")
     with pytest.raises(NotFound):
         writes[2]()
-    active = board.create_thread("Fable", "old", "New discussion", "new body")
+    active = board.create_thread("Claude", "old", "New discussion", "new body")
     assert board.mark_all_read("Barry") == {"threads_marked": 1, "messages_marked": 1}
     archived_read = board.read_thread("Barry", 1, archived=True)
     assert archived_read["thread"]["last_read_message_id"] == 1
@@ -145,7 +145,7 @@ def test_restore_collisions_and_repeated_cycles(board):
         assert again | {"state_token": restored["state_token"]} == restored
         assert again["state_token"] != restored["state_token"]
     # Old request payload remains usable after a collision rename, by permanent request key.
-    assert board.create_thread("Astra", "old", "Review needle", "needle opening", request_id="creation")["id"] == 1
+    assert board.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation")["id"] == 1
 
 
 def test_archive_collision_and_length_limits(tmp_path):
@@ -180,7 +180,7 @@ def test_concurrent_schema1_migration_and_reopen_do_not_rehash(board):
         reopened = list(pool.map(lambda _: Store(board.directory), range(6)))
     assert records(reopened[0])["requests"] == before["requests"]
     with reopened[0].connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 4
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
     assert reopened[0].list_projects("Barry", archived=True)[0]["id"] == archive["id"]
 
@@ -239,7 +239,7 @@ def test_http_archive_contract_and_boundary(board):
 def test_real_mcp_archive_contract(board):
     async def run():
         params = StdioServerParameters(command=sys.executable, args=["-m", "correspondence.mcp_server"],
-            env={**os.environ, "CORRESPONDENCE_DATA_DIR": str(board.directory), "CORRESPONDENCE_AUTHOR": "Astra"})
+            env={**os.environ, "CORRESPONDENCE_DATA_DIR": str(board.directory), "CORRESPONDENCE_AUTHOR": "Codex"})
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -324,4 +324,4 @@ def test_schema2_upgrade_generates_tokens_once_and_preserves_archives(board):
     assert records(Store(board.directory)) == after
     assert stores[0].list_projects("Barry", archived=True)[0]["id"] == archived["id"]
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 4

@@ -6,12 +6,14 @@ import json
 import os
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-AUTHORS = {"Barry", "Astra", "Fable"}
+AUTHORS = {"Barry", "Claude", "Codex"}
+LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 
 
@@ -25,7 +27,7 @@ class Conflict(ValueError):
 
 def author_name(author: str) -> str:
     if author not in AUTHORS:
-        raise ValueError("Author must be Barry, Astra, or Fable")
+        raise ValueError("Author must be Barry, Claude, or Codex")
     return author
 
 
@@ -45,39 +47,30 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.directory / "board.sqlite3"
         with self.connect(transaction=False) as con:
-            con.execute("PRAGMA journal_mode=WAL")
-            con.executescript("""
-                CREATE TABLE IF NOT EXISTS projects (
-                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
-                    repo_path TEXT, created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS threads (
-                    id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-                    title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id),
-                    author TEXT NOT NULL CHECK(author IN ('Barry','Astra','Fable')),
-                    model TEXT, body TEXT NOT NULL, kind TEXT NOT NULL,
-                    parent_id INTEGER REFERENCES messages(id), created_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id,id);
-                CREATE TABLE IF NOT EXISTS read_markers (
-                    author TEXT NOT NULL, thread_id INTEGER NOT NULL REFERENCES threads(id),
-                    message_id INTEGER NOT NULL REFERENCES messages(id), PRIMARY KEY(author,thread_id)
-                );
-                CREATE TABLE IF NOT EXISTS requests (
-                    author TEXT NOT NULL, request_id TEXT NOT NULL, operation TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL, result_id INTEGER NOT NULL, PRIMARY KEY(author,request_id)
-                );
-                CREATE TRIGGER IF NOT EXISTS messages_no_update BEFORE UPDATE ON messages
-                    BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END;
-                CREATE TRIGGER IF NOT EXISTS messages_no_delete BEFORE DELETE ON messages
-                    BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END;
-            """)
+            self._enable_wal(con)
             self._upgrade(con)
         self.path.chmod(0o600)
+
+    @staticmethod
+    def _enable_wal(con):
+        # Switching journal mode can return SQLITE_BUSY immediately despite the
+        # connection busy timeout when initializers race. Bound this retry phase
+        # explicitly; restore the normal timeout before taking the migration lock.
+        timeout = con.execute("PRAGMA busy_timeout").fetchone()[0]
+        con.execute("PRAGMA busy_timeout=0")
+        deadline = time.monotonic() + timeout / 1000
+        try:
+            while True:
+                try:
+                    con.execute("PRAGMA journal_mode=WAL").fetchone()
+                    return
+                except sqlite3.OperationalError as error:
+                    remaining = deadline - time.monotonic()
+                    if (getattr(error, "sqlite_errorcode", 0) & 255) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or remaining <= 0:
+                        raise
+                    time.sleep(min(0.05, remaining))
+        finally:
+            con.execute(f"PRAGMA busy_timeout={timeout}")
 
     @staticmethod
     def _fingerprint(payload):
@@ -85,29 +78,98 @@ class Store:
 
     @classmethod
     def _upgrade(cls, con):
-        # Lock before checking the version: concurrent server startups must not
-        # both run ALTER TABLE, or recompute fingerprints after a project rekey.
-        con.execute("BEGIN IMMEDIATE")
-        version = con.execute("PRAGMA user_version").fetchone()[0]
-        if version < 1:
-            for row in con.execute("SELECT rowid, operation, result_id FROM requests").fetchall():
-                if row["operation"] == "post_message":
-                    m = con.execute("SELECT thread_id, body, kind, parent_id FROM messages WHERE id=?", (row["result_id"],)).fetchone()
-                    payload = [m["thread_id"], m["body"], m["kind"], m["parent_id"]]
-                else:
-                    t = con.execute("SELECT project_id, title FROM threads WHERE id=?", (row["result_id"],)).fetchone()
-                    m = con.execute("SELECT body, kind FROM messages WHERE thread_id=? ORDER BY id LIMIT 1", (row["result_id"],)).fetchone()
-                    payload = [t["project_id"], t["title"], m["body"], m["kind"]]
-                con.execute("UPDATE requests SET fingerprint=? WHERE rowid=?", (cls._fingerprint(payload), row["rowid"]))
-        if version < 2:
-            con.execute("ALTER TABLE projects ADD COLUMN archived_at TEXT")
-            con.execute("ALTER TABLE projects ADD COLUMN archived_original_id TEXT")
-        if version < 3:
-            con.execute("ALTER TABLE projects ADD COLUMN state_token TEXT")
-            for row in con.execute("SELECT id FROM projects").fetchall():
-                con.execute("UPDATE projects SET state_token=? WHERE id=?", (uuid4().hex, row["id"]))
-            con.execute("PRAGMA user_version=3")
-        con.commit()
+        # SQLite's table-rebuild procedure: disable FK enforcement before BEGIN,
+        # serialize all schema checks/DDL, validate the replacement, then re-enable.
+        con.execute("PRAGMA foreign_keys=OFF")
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("""CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    repo_path TEXT, created_at TEXT NOT NULL
+                )""")
+            con.execute("""CREATE TABLE IF NOT EXISTS threads (
+                    id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""")
+            con.execute("""CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id),
+                    author TEXT NOT NULL CHECK(author IN ('Barry','Astra','Fable')),
+                    model TEXT, body TEXT NOT NULL, kind TEXT NOT NULL,
+                    parent_id INTEGER REFERENCES messages(id), created_at TEXT NOT NULL
+                )""")
+            con.execute("""CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id,id)""")
+            con.execute("""CREATE TABLE IF NOT EXISTS read_markers (
+                    author TEXT NOT NULL, thread_id INTEGER NOT NULL REFERENCES threads(id),
+                    message_id INTEGER NOT NULL REFERENCES messages(id), PRIMARY KEY(author,thread_id)
+                )""")
+            con.execute("""CREATE TABLE IF NOT EXISTS requests (
+                    author TEXT NOT NULL, request_id TEXT NOT NULL, operation TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, result_id INTEGER NOT NULL, PRIMARY KEY(author,request_id)
+                )""")
+            version = con.execute("PRAGMA user_version").fetchone()[0]
+            if version < 1:
+                for row in con.execute("SELECT rowid, operation, result_id FROM requests").fetchall():
+                    if row["operation"] == "post_message":
+                        m = con.execute("SELECT thread_id, body, kind, parent_id FROM messages WHERE id=?", (row["result_id"],)).fetchone()
+                        payload = [m["thread_id"], m["body"], m["kind"], m["parent_id"]]
+                    else:
+                        t = con.execute("SELECT project_id, title FROM threads WHERE id=?", (row["result_id"],)).fetchone()
+                        m = con.execute("SELECT body, kind FROM messages WHERE thread_id=? ORDER BY id LIMIT 1", (row["result_id"],)).fetchone()
+                        payload = [t["project_id"], t["title"], m["body"], m["kind"]]
+                    con.execute("UPDATE requests SET fingerprint=? WHERE rowid=?", (cls._fingerprint(payload), row["rowid"]))
+            if version < 2:
+                con.execute("ALTER TABLE projects ADD COLUMN archived_at TEXT")
+                con.execute("ALTER TABLE projects ADD COLUMN archived_original_id TEXT")
+            if version < 3:
+                con.execute("ALTER TABLE projects ADD COLUMN state_token TEXT")
+                for row in con.execute("SELECT id FROM projects").fetchall():
+                    con.execute("UPDATE projects SET state_token=? WHERE id=?", (uuid4().hex, row["id"]))
+            if version < 4:
+                cls._upgrade_participants(con)
+                if con.execute("PRAGMA foreign_key_check").fetchall():
+                    raise sqlite3.IntegrityError("Foreign key violation during participant migration")
+                if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise sqlite3.IntegrityError("Integrity failure during participant migration")
+                con.execute("PRAGMA user_version=4")
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        finally:
+            con.execute("PRAGMA foreign_keys=ON")
+
+    @staticmethod
+    def _upgrade_participants(con):
+        # Copy every historical column verbatim. The broader CHECK permits copied
+        # history; the INSERT trigger only permits current authors after migration.
+        con.execute("""CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id),
+            author TEXT NOT NULL CHECK(author IN ('Barry','Claude','Codex','Astra','Fable')),
+            model TEXT, body TEXT NOT NULL, kind TEXT NOT NULL,
+            parent_id INTEGER REFERENCES messages(id), created_at TEXT NOT NULL)""")
+        con.execute("""INSERT INTO messages_new(id,thread_id,author,model,body,kind,parent_id,created_at)
+            SELECT id,thread_id,author,model,body,kind,parent_id,created_at FROM messages""")
+        con.execute("""CREATE TABLE read_markers_new (
+            author TEXT NOT NULL CHECK(author IN ('Barry','Claude','Codex')),
+            thread_id INTEGER NOT NULL REFERENCES threads(id),
+            message_id INTEGER NOT NULL REFERENCES messages(id), PRIMARY KEY(author,thread_id))""")
+        con.execute("""INSERT INTO read_markers_new(author,thread_id,message_id)
+            SELECT CASE author WHEN 'Fable' THEN 'Claude' WHEN 'Astra' THEN 'Codex' ELSE author END,
+                thread_id,MAX(message_id) FROM read_markers GROUP BY
+                CASE author WHEN 'Fable' THEN 'Claude' WHEN 'Astra' THEN 'Codex' ELSE author END,thread_id""")
+        con.execute("DROP TABLE read_markers")
+        con.execute("DROP TABLE messages")
+        con.execute("ALTER TABLE messages_new RENAME TO messages")
+        con.execute("ALTER TABLE read_markers_new RENAME TO read_markers")
+        con.execute("CREATE INDEX messages_thread ON messages(thread_id,id)")
+        con.execute("""CREATE TRIGGER messages_current_author BEFORE INSERT ON messages
+            WHEN NEW.author NOT IN ('Barry','Claude','Codex')
+            BEGIN SELECT RAISE(ABORT, 'Use a current participant identity'); END""")
+        con.execute("""CREATE TRIGGER messages_no_update BEFORE UPDATE ON messages
+            BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
+        con.execute("""CREATE TRIGGER messages_no_delete BEFORE DELETE ON messages
+            BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
 
     @contextmanager
     def connect(self, write=False, transaction=True):
@@ -142,11 +204,14 @@ class Store:
         if result_id is not None:
             con.execute("INSERT INTO requests VALUES (?,?,?,?,?)", (author, request_id, operation, fingerprint, result_id))
             return result_id
-        row = con.execute("SELECT * FROM requests WHERE author=? AND request_id=?", (author, request_id)).fetchone()
-        if row:
-            if row["operation"] != operation or row["fingerprint"] != fingerprint:
+        rows = con.execute("SELECT * FROM requests WHERE author IN (?,?) AND request_id=?",
+                           (author, LEGACY_AUTHORS.get(author, author), request_id)).fetchall()
+        if rows:
+            if any(row["operation"] != operation or row["fingerprint"] != fingerprint for row in rows):
                 raise Conflict("request_id has already been used with different content")
-            return row["result_id"]
+            if len({row["result_id"] for row in rows}) != 1:
+                raise Conflict("request_id has conflicting historical and current results")
+            return rows[0]["result_id"]
         return None
 
     @staticmethod
@@ -176,16 +241,16 @@ class Store:
         """Batch explicit acknowledgement metadata within the caller's snapshot."""
         if not threads:
             return []
-        records = {thread["id"]: dict(thread, read_markers={name: 0 for name in ("Barry", "Astra", "Fable")},
-                                      unread_counts={name: 0 for name in ("Barry", "Astra", "Fable")},
+        records = {thread["id"]: dict(thread, read_markers={name: 0 for name in ("Barry", "Claude", "Codex")},
+                                      unread_counts={name: 0 for name in ("Barry", "Claude", "Codex")},
                                       message_count=0, first_message_id=None, last_message_id=None,
                                       first_unread_message_id=None, last_author=None) for thread in threads}
         placeholders = ",".join("?" for _ in records)
-        stats = con.execute(f"""WITH participants(author) AS (VALUES ('Barry'),('Astra'),('Fable'))
+        stats = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('Barry','Barry'),('Claude','Fable'),('Codex','Astra'))
             SELECT m.thread_id, p.author participant, COALESCE(r.message_id,0) marker,
                 COUNT(*) message_count, MIN(m.id) first_message_id, MAX(m.id) last_message_id,
-                SUM(m.id>COALESCE(r.message_id,0) AND m.author!=p.author) unread_count,
-                MIN(CASE WHEN m.id>COALESCE(r.message_id,0) AND m.author!=p.author THEN m.id END) first_unread_message_id
+                SUM(m.id>COALESCE(r.message_id,0) AND m.author NOT IN (p.author,p.legacy)) unread_count,
+                MIN(CASE WHEN m.id>COALESCE(r.message_id,0) AND m.author NOT IN (p.author,p.legacy) THEN m.id END) first_unread_message_id
             FROM messages m CROSS JOIN participants p
             LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=p.author
             WHERE m.thread_id IN ({placeholders}) GROUP BY m.thread_id,p.author""", tuple(records))
@@ -308,7 +373,7 @@ class Store:
         self._archive_flag(archived)
         author_name(author)
         with self.connect() as con:
-            projects = [dict(row, unread_counts={name: 0 for name in ("Barry", "Astra", "Fable")})
+            projects = [dict(row, unread_counts={name: 0 for name in ("Barry", "Claude", "Codex")})
                         for row in con.execute("""SELECT p.*,
                             (SELECT MAX(t.updated_at) FROM threads t WHERE t.project_id=p.id) last_activity_at
                             FROM projects p WHERE (p.archived_at IS NOT NULL)=? ORDER BY p.name COLLATE NOCASE, p.id LIMIT 1000""", (archived,))]
@@ -316,11 +381,11 @@ class Store:
                 return []
             by_id = {project["id"]: project for project in projects}
             placeholders = ",".join("?" for _ in projects)
-            counts = con.execute(f"""WITH participants(author) AS (VALUES ('Barry'),('Astra'),('Fable'))
+            counts = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('Barry','Barry'),('Claude','Fable'),('Codex','Astra'))
                 SELECT t.project_id,p.author participant,COUNT(*) unread_count
                 FROM messages m JOIN threads t ON t.id=m.thread_id CROSS JOIN participants p
                 LEFT JOIN read_markers r ON r.thread_id=t.id AND r.author=p.author
-                WHERE t.project_id IN ({placeholders}) AND m.id>COALESCE(r.message_id,0) AND m.author!=p.author
+                WHERE t.project_id IN ({placeholders}) AND m.id>COALESCE(r.message_id,0) AND m.author NOT IN (p.author,p.legacy)
                 GROUP BY t.project_id,p.author""", tuple(by_id))
             for row in counts:
                 by_id[row["project_id"]]["unread_counts"][row["participant"]] = row["unread_count"]
@@ -336,9 +401,9 @@ class Store:
         with self.connect() as con:
             rows = con.execute("""SELECT t.* FROM threads t JOIN projects p ON p.id=t.project_id WHERE (p.archived_at IS NOT NULL)=? AND (? IS NULL OR t.project_id=?)
                 AND (?=0 OR EXISTS (SELECT 1 FROM messages m LEFT JOIN read_markers r
-                ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author!=?
+                ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author NOT IN (?,?)
                 AND m.id>COALESCE(r.message_id,0))) ORDER BY t.updated_at DESC, t.id DESC LIMIT ?""",
-                (archived, project_id, project_id, unread_only, author, author, limit)).fetchall()
+                (archived, project_id, project_id, unread_only, author, author, LEGACY_AUTHORS.get(author, author), limit)).fetchall()
             return self._thread_records(con, [dict(row) for row in rows], author)
 
     def create_thread(self, author, project_id, title, body, kind="note", model=None, request_id=None):
@@ -440,10 +505,10 @@ class Store:
             # BEGIN IMMEDIATE holds other writers until these boundaries commit.
             # Query the board directly: project/thread listing limits must not apply.
             snapshots = con.execute("""SELECT m.thread_id, MAX(m.id) last_message_id,
-                SUM(m.id>COALESCE(r.message_id,0) AND m.author!=?) unread_count
+                SUM(m.id>COALESCE(r.message_id,0) AND m.author NOT IN (?,?)) unread_count
                 FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
                 LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
-                WHERE p.archived_at IS NULL GROUP BY m.thread_id""", (author, author)).fetchall()
+                WHERE p.archived_at IS NULL GROUP BY m.thread_id""", (author, LEGACY_AUTHORS.get(author, author), author)).fetchall()
             con.executemany("""INSERT INTO read_markers(author,thread_id,message_id) VALUES (?,?,?)
                 ON CONFLICT(author,thread_id) DO UPDATE
                 SET message_id=MAX(read_markers.message_id,excluded.message_id)""",
@@ -566,8 +631,8 @@ class Store:
                 LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
                 WHERE (p.archived_at IS NOT NULL)=? AND m.id>? AND m.id<=? AND (? IS NULL OR t.project_id=?)
                 AND (? IS NULL OR m.thread_id=?)
-                AND (?=0 OR (m.id>COALESCE(r.message_id,0) AND m.author!=?))"""
-            parameters = (author, archived, after, through, project_id, project_id, thread_id, thread_id, unread_only, author)
+                AND (?=0 OR (m.id>COALESCE(r.message_id,0) AND m.author NOT IN (?,?)))"""
+            parameters = (author, archived, after, through, project_id, project_id, thread_id, thread_id, unread_only, author, LEGACY_AUTHORS.get(author, author))
             total = con.execute("SELECT COUNT(*) " + where, parameters).fetchone()[0]
             rows = con.execute("SELECT m.*,t.project_id,t.title thread_title,p.name project_name " + where + " ORDER BY m.id LIMIT ?", (*parameters, limit))
             items = [self._snippet(dict(row), "") for row in rows]
@@ -646,8 +711,8 @@ class Store:
         self._agent_id(after, "after", zero=True)
         self._agent_id(before, "before", optional=True)
         q = clean_text(q, "q", 500)
-        if author_filter is not None:
-            author_name(author_filter)
+        if author_filter is not None and author_filter not in AUTHORS | set(LEGACY_AUTHORS.values()):
+            raise ValueError("Unknown author filter")
         if kind is not None and kind not in KINDS:
             raise ValueError("Unknown message kind")
         if since is not None:
@@ -662,11 +727,11 @@ class Store:
             rows = con.execute("""SELECT m.*,t.project_id,t.title thread_title,p.name project_name
                 FROM messages m JOIN threads t ON t.id=m.thread_id JOIN projects p ON p.id=t.project_id
                 WHERE (p.archived_at IS NOT NULL)=? AND m.body LIKE ? ESCAPE '\\' AND (? IS NULL OR t.project_id=?)
-                AND (? IS NULL OR m.thread_id=?) AND (? IS NULL OR m.author=?)
+                AND (? IS NULL OR m.thread_id=?) AND (? IS NULL OR m.author IN (?,?))
                 AND (? IS NULL OR m.kind=?) AND (? IS NULL OR m.created_at>=?)
                 AND m.id>? AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
                 (archived, self._literal_pattern(q), project_id, project_id, thread_id, thread_id,
-                 author_filter, author_filter, kind, kind, since, since, after, before, before, limit + 1)).fetchall()
+                 author_filter, author_filter, LEGACY_AUTHORS.get(author_filter, author_filter), kind, kind, since, since, after, before, before, limit + 1)).fetchall()
             items = [self._snippet(dict(row), q) for row in rows[:limit]]
             return {"items": items, "has_more": len(rows) > limit,
                     "next_before": items[-1]["id"] if items else before}
@@ -691,9 +756,9 @@ class Store:
                 WHERE (p.archived_at IS NOT NULL)=? AND (? IS NULL OR t.project_id=?) AND (? IS NULL OR t.id<?)
                 AND (? IS NULL OR t.title LIKE ? ESCAPE '\\')
                 AND (?=0 OR EXISTS (SELECT 1 FROM messages m LEFT JOIN read_markers r
-                    ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author!=?
+                    ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author NOT IN (?,?)
                     AND m.id>COALESCE(r.message_id,0))) ORDER BY t.id DESC LIMIT ?""",
-                (archived, project_id, project_id, before, before, pattern, pattern, unread_only, author, author, limit + 1)).fetchall()
+                (archived, project_id, project_id, before, before, pattern, pattern, unread_only, author, author, LEGACY_AUTHORS.get(author, author), limit + 1)).fetchall()
             items = [self._compact_thread(record) for record in self._thread_records(con, [dict(row) for row in rows[:limit]], author)]
             return {"items": items, "has_more": len(rows) > limit,
                     "next_before": items[-1]["id"] if items else before}

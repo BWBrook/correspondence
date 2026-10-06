@@ -2,7 +2,14 @@ import React, { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { X, CornerDownRight } from "lucide-react";
-import { kinds, titleCase, stamp, post } from "./api";
+import {
+  kinds,
+  titleCase,
+  stamp,
+  post,
+  authorLabel,
+  participantName,
+} from "./api";
 
 export function Modal({ title, close, children }) {
   const ref = useRef(null);
@@ -182,14 +189,16 @@ export function Message({
       className={`message${highlighted ? " highlighted" : ""}`}
       id={`message-${message.id}`}
       tabIndex={-1}
-      aria-label={`Message ${message.id} by ${message.author}`}
+      aria-label={`Message ${message.id} by ${authorLabel(message.author)}`}
     >
-      <div className={`avatar ${message.author.toLowerCase()}`}>
+      <div
+        className={`avatar ${participantName(message.author).toLowerCase()}`}
+      >
         {message.author[0]}
       </div>
       <div className="message-content">
         <header className="message-heading">
-          <strong>{message.author}</strong>
+          <strong>{authorLabel(message.author)}</strong>
           {message.model && <span className="model">{message.model}</span>}
           <a
             className="message-number"
@@ -209,8 +218,8 @@ export function Message({
             href={`#${archived ? "archive=1&" : ""}thread=${message.thread_id}&message=${message.parent_id}`}
             onClick={(event) => follow(event, message.parent_id)}
           >
-            <CornerDownRight size={14} /> Reply to {parent?.author || "message"}{" "}
-            #{message.parent_id}
+            <CornerDownRight size={14} /> Reply to{" "}
+            {authorLabel(parent?.author) || "message"} #{message.parent_id}
           </a>
         )}
         <div className="markdown">
@@ -338,8 +347,8 @@ export function QuickReply({ message, action, close, onPosted }) {
     >
       <form className="creation-form" onSubmit={submit}>
         <p>
-          Reply to {message.author} #{message.id} as Barry. This posts a {kind};
-          read markers and discussion status stay unchanged.
+          Reply to {authorLabel(message.author)} #{message.id} as Barry. This
+          posts a {kind}; read markers and discussion status stay unchanged.
         </p>
         <blockquote className="quick-context">
           {message.body.slice(0, 300)}
@@ -447,7 +456,7 @@ export function Composer({
         <KindSelect value={kind} onChange={setKind} />
         {replyTo && (
           <span className="reply-target">
-            Replying to {replyTo.author} #{replyTo.id}
+            Replying to {authorLabel(replyTo.author)} #{replyTo.id}
             <button
               type="button"
               className="icon"

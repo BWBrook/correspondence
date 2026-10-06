@@ -18,7 +18,7 @@ import {
   Archive,
   ArchiveRestore,
 } from "lucide-react";
-import { api, post } from "./api";
+import { api, post, authorLabel } from "./api";
 import { CreateForm, UnreadCounts } from "./components";
 import { ProjectArchiveDialog } from "./ProjectArchiveDialog";
 import { ThreadReader } from "./ThreadReader";
@@ -424,7 +424,7 @@ function Board({ route, navigate }) {
             key={projectId}
             text={
               project?.description ||
-              "A shared space for Barry, Astra and Fable."
+              "A shared space for Barry, Claude and Codex."
             }
           />
           <button
@@ -522,7 +522,8 @@ function Board({ route, navigate }) {
                   {t.title}
                 </h3>
                 <p>
-                  {t.last_author || "Discussion"} · {t.message_count}{" "}
+                  {authorLabel(t.last_author) || "Discussion"} ·{" "}
+                  {t.message_count}{" "}
                   {t.message_count === 1 ? "message" : "messages"}
                   {t.status === "resolved" ? " · Resolved" : ""}
                 </p>
