@@ -286,7 +286,9 @@ def test_all_participant_acknowledgements_across_projects(board):
         assert metadata["unread_count"] == expected_counts[participant]
         assert board.get_message(participant, fable_post["id"])["thread"] == metadata
         threads = {row["id"]: row for row in board.list_threads(participant)}
-        assert threads[first] == metadata
+        listed = dict(threads[first])
+        assert listed.pop("last_excerpt") == "Astra latest"
+        assert listed == metadata
         assert threads[second]["unread_counts"] == {"Barry": 2, "Codex": 1, "Claude": 1}
         projects = {row["id"]: row for row in board.list_projects(participant)}
         assert projects["demo"]["unread_counts"] == {"Barry": 4, "Codex": 1, "Claude": 4}

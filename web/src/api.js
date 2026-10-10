@@ -45,3 +45,27 @@ export function stamp(value) {
     timeStyle: "short",
   });
 }
+export function shortTime(value) {
+  const date = new Date(value);
+  const now = new Date();
+  const days = Math.round(
+    (new Date(now.toDateString()) - new Date(date.toDateString())) / 86400000,
+  );
+  if (days === 0)
+    return date.toLocaleTimeString(undefined, { timeStyle: "short" });
+  if (days === 1) return "Yesterday";
+  if (days < 7) return date.toLocaleDateString(undefined, { weekday: "short" });
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+export function plainExcerpt(markdown) {
+  return (markdown || "")
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_>#|]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}

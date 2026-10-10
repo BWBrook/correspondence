@@ -17,8 +17,9 @@ import {
   CheckCheck,
   Archive,
   ArchiveRestore,
+  Activity,
 } from "lucide-react";
-import { api, post, authorLabel } from "./api";
+import { api, post, authorLabel, shortTime, plainExcerpt, stamp } from "./api";
 import { CreateForm, UnreadCounts } from "./components";
 import { ProjectArchiveDialog } from "./ProjectArchiveDialog";
 import { ThreadReader } from "./ThreadReader";
@@ -104,8 +105,6 @@ function Board({ route, navigate }) {
       return "alphabetical";
     }
   });
-  const currentOrder = useRef(projectOrder);
-  currentOrder.current = projectOrder;
   const [projects, setProjects] = useState([]),
     [projectId, setProjectId] = useState(route.projectId);
   const [threads, setThreads] = useState([]);
@@ -143,6 +142,7 @@ function Board({ route, navigate }) {
     };
   }, []);
   const project = projects.find((p) => p.id === projectId);
+  const projectNames = Object.fromEntries(projects.map((p) => [p.id, p.name]));
   const listedThread = threads.find((thread) => thread.id === threadId);
   // An acknowledged thread disappears from an Unread-filtered list. Retain its
   // fresh metadata so the open reader also reflects the explicit bulk action.
@@ -172,9 +172,7 @@ function Board({ route, navigate }) {
     }
     setProjects(list);
     setProjectId((previous) =>
-      list.some((p) => p.id === previous)
-        ? previous
-        : orderProjects(list, currentOrder.current)[0]?.id || null,
+      list.some((p) => p.id === previous) ? previous : null,
     );
     return list;
   }, [archived]);
@@ -182,12 +180,11 @@ function Board({ route, navigate }) {
     const selected = currentProject.current,
       unread = currentUnread.current,
       request = ++listRequest.current;
-    if (!selected) {
-      setThreads([]);
-      return;
-    }
+    const scope = selected
+      ? `project_id=${encodeURIComponent(selected)}`
+      : "limit=60";
     const list = await api(
-      `/threads?project_id=${encodeURIComponent(selected)}&unread_only=${unread}&archived=${archived}`,
+      `/threads?${scope}&unread_only=${unread}&archived=${archived}`,
     );
     if (
       request === listRequest.current &&
@@ -241,7 +238,7 @@ function Board({ route, navigate }) {
     return () => clearInterval(poll);
   }, [refreshProjects, refreshList]);
   useEffect(() => {
-    if (!route.threadId && route.projectId) setProjectId(route.projectId);
+    if (!route.threadId) setProjectId(route.projectId);
   }, [route.projectId, route.threadId]);
   function selectThread(id) {
     navigate(id);
@@ -368,20 +365,34 @@ function Board({ route, navigate }) {
           >
             <Search size={17} /> {archived ? "Search archive" : "Search board"}
           </button>
+          <button
+            className={`project activity-view ${projectId ? "" : "selected"}`}
+            aria-current={projectId ? undefined : "page"}
+            onClick={() => selectProject(null)}
+          >
+            <span className="project-label">
+              <Activity size={15} />{" "}
+              {archived ? "All archived discussions" : "Recent activity"}
+            </span>
+          </button>
           {orderProjects(projects, projectOrder).map((p) => (
             <button
               key={p.id}
               className={`project ${p.id === projectId ? "selected" : ""}`}
+              aria-current={p.id === projectId ? "page" : undefined}
+              title={
+                p.last_activity_at
+                  ? `Last activity ${stamp(p.last_activity_at)}`
+                  : "No discussions yet"
+              }
               onClick={() => selectProject(p.id)}
             >
               <span className="project-label">
                 {p.name}
-                {archived ? (
+                {archived && (
                   <small className="archive-date">
                     Archived {new Date(p.archived_at).toLocaleDateString()}
                   </small>
-                ) : (
-                  <UnreadCounts counts={p.unread_counts} />
                 )}
               </span>
               {!archived && p.unread_count > 0 && (
@@ -414,25 +425,39 @@ function Board({ route, navigate }) {
       </aside>
       <section className="discussion-list" aria-label="Discussions">
         <div className="list-header">
-          <h1>{project?.name || (archived ? "Archive" : "Your projects")}</h1>
+          <h1>
+            {projectId
+              ? project?.name
+              : archived
+                ? "Archived discussions"
+                : "Recent activity"}
+          </h1>
           {archived && (
             <p className="archive-hint">
               Preserved discussions. Restore a project to continue writing.
             </p>
           )}
-          <ProjectDescription
-            key={projectId}
-            text={
-              project?.description ||
-              "A shared space for Barry, Claude and Codex."
-            }
-          />
+          {project ? (
+            project.description && (
+              <ProjectDescription key={projectId} text={project.description} />
+            )
+          ) : (
+            !archived && (
+              <p className="activity-hint">
+                The latest discussions across every project.
+              </p>
+            )
+          )}
           <button
             className="outline search-launch"
-            onClick={() => setSearchScope("project")}
-            disabled={!project}
+            onClick={() => setSearchScope(project ? "project" : "all")}
           >
-            <Search size={18} /> Search this project
+            <Search size={18} />{" "}
+            {project
+              ? "Search this project"
+              : archived
+                ? "Search archive"
+                : "Search board"}
           </button>
           <div className="tabs">
             <button
@@ -458,10 +483,9 @@ function Board({ route, navigate }) {
               <RefreshCw size={16} />
             </button>
           </div>
-          {!archived && (
+          {!archived && project && (
             <button
               className="outline new-discussion"
-              disabled={!projectId}
               onClick={() => setModal("thread")}
             >
               <Plus size={17} /> New discussion
@@ -515,19 +539,35 @@ function Board({ route, navigate }) {
                 key={t.id}
                 onClick={() => selectThread(t.id)}
               >
+                {!projectId && (
+                  <span className="thread-project">
+                    {projectNames[t.project_id] || t.project_id}
+                  </span>
+                )}
                 <h3>
                   {!archived && t.unread_count > 0 && (
-                    <span className="unread-dot" />
+                    <span className="unread-dot" aria-hidden="true" />
                   )}
                   {t.title}
                 </h3>
-                <p>
+                <p className="thread-meta">
                   {authorLabel(t.last_author) || "Discussion"} ·{" "}
-                  {t.message_count}{" "}
+                  <time dateTime={t.updated_at} title={stamp(t.updated_at)}>
+                    {shortTime(t.updated_at)}
+                  </time>{" "}
+                  · {t.message_count}{" "}
                   {t.message_count === 1 ? "message" : "messages"}
+                  {!archived && t.unread_count > 0
+                    ? ` · ${t.unread_count} unread`
+                    : ""}
                   {t.status === "resolved" ? " · Resolved" : ""}
                 </p>
-                <UnreadCounts counts={t.unread_counts} />
+                {t.last_excerpt && (
+                  <p className="thread-excerpt">
+                    {plainExcerpt(t.last_excerpt)}
+                  </p>
+                )}
+                {!archived && <UnreadCounts counts={t.unread_counts} />}
               </button>
             ))
           ) : (
@@ -536,7 +576,9 @@ function Board({ route, navigate }) {
                 ? "You’re all caught up."
                 : archived
                   ? "No archived discussions here."
-                  : "Start a discussion to exchange ideas, questions, and evidence."}
+                  : project
+                    ? "Start a discussion to exchange ideas, questions, and evidence."
+                    : "No discussions yet. Create a project to begin."}
             </div>
           )}
         </div>
@@ -553,7 +595,6 @@ function Board({ route, navigate }) {
           route={route}
           listed={readerThread}
           onNavigate={(options) => navigate(threadId, options)}
-          onProject={setProjectId}
           onBack={() => selectProject(projectId)}
           onRefresh={refreshCounts}
           onSearch={() => setSearchScope("thread")}
@@ -571,7 +612,7 @@ function Board({ route, navigate }) {
                 ? "Select an archived project to read or search its discussions. Archived content stays outside the active board."
                 : "Choose a discussion, or start one. The reasoning stays here for the next time you return."}
             </p>
-            {!archived && !projectId && (
+            {!archived && !projects.length && (
               <button onClick={() => setModal("project")}>
                 <Plus size={17} /> Create your first project
               </button>
@@ -588,7 +629,7 @@ function Board({ route, navigate }) {
           close={() => setSearchScope(null)}
           onSelect={(message) => {
             setSearchScope(null);
-            setProjectId(message.project_id);
+            if (currentProject.current) setProjectId(message.project_id);
             navigate(message.thread_id, { messageId: message.id });
           }}
         />

@@ -168,7 +168,6 @@ export function Message({
   highlighted,
   onMarkRead,
   readBusy,
-  onQuickReply,
   archived = false,
 }) {
   const parent = messages.find((m) => m.id === message.parent_id);
@@ -249,23 +248,6 @@ export function Message({
             >
               <CornerDownRight size={14} /> Reply
             </button>
-            {message.author !== "Barry" &&
-              ["proposal", "question"].includes(message.kind) && (
-                <>
-                  <button
-                    className="text-button"
-                    onClick={() => onQuickReply(message, "accept")}
-                  >
-                    Accept…
-                  </button>
-                  <button
-                    className="text-button"
-                    onClick={() => onQuickReply(message, "seen")}
-                  >
-                    Seen, no action…
-                  </button>
-                </>
-              )}
             {onMarkRead && (
               <button
                 className="text-button mark-through"
@@ -284,110 +266,21 @@ export function Message({
 }
 
 export function UnreadCounts({ counts }) {
-  if (!counts) return null;
+  const waiting = Object.entries(counts || {}).filter(
+    ([name, count]) => name !== "Barry" && count > 0,
+  );
+  if (!waiting.length) return null;
   return (
     <span
       className="participant-counts"
-      title="Messages from others beyond each participant's explicit read acknowledgement. This does not prove whether they have read them."
+      title="Messages from others beyond each assistant's explicit read acknowledgement. This does not show whether they have read them."
     >
-      Awaiting acknowledgement:{" "}
-      {Object.entries(counts)
-        .map(([name, count]) => `${name} ${count}`)
-        .join(" · ")}
+      Unacknowledged by{" "}
+      {waiting.map(([name, count]) => `${name} ${count}`).join(" · ")}
     </span>
   );
 }
 
-// Keep retry identities across closing/reopening a quick reply in this page.
-const quickRequests = new Map();
-export function QuickReply({ message, action, close, onPosted }) {
-  const [body, setBody] = useState(
-    action === "accept" ? "Accepted." : "Seen; no action needed from me.",
-  );
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const kind = action === "accept" ? "decision" : "note";
-  async function submit(event) {
-    event.preventDefault();
-    if (busy || !body.trim()) return;
-    const payload = { body, kind, parent_id: message.id };
-    const signature = JSON.stringify([message.thread_id, payload]);
-    let attempt = quickRequests.get(signature);
-    if (!attempt) {
-      attempt = { id: crypto.randomUUID() };
-      quickRequests.set(signature, attempt);
-    }
-    setBusy(true);
-    setError("");
-    try {
-      if (!attempt.promise) {
-        attempt.promise = post(`/threads/${message.thread_id}/messages`, {
-          ...payload,
-          request_id: attempt.id,
-        });
-        attempt.promise.catch(() => {
-          attempt.promise = null;
-        });
-      }
-      const result = await attempt.promise;
-      onPosted(result);
-    } catch (error) {
-      setError(error.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  function dismiss() {
-    if (!busy) close();
-  }
-  return (
-    <Modal
-      title={action === "accept" ? "Accept this message" : "Seen, no action"}
-      close={dismiss}
-    >
-      <form className="creation-form" onSubmit={submit}>
-        <p>
-          Reply to {authorLabel(message.author)} #{message.id} as Barry. This
-          posts a {kind}; read markers and discussion status stay unchanged.
-        </p>
-        <blockquote className="quick-context">
-          {message.body.slice(0, 300)}
-          {message.body.length > 300 ? "…" : ""}
-        </blockquote>
-        <label>
-          Your reply
-          <textarea
-            autoFocus
-            required
-            maxLength={100000}
-            rows={3}
-            value={body}
-            disabled={busy}
-            onChange={(event) => setBody(event.target.value)}
-          />
-        </label>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="form-actions">
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy}
-            onClick={dismiss}
-          >
-            Cancel
-          </button>
-          <button disabled={busy || !body.trim()}>
-            {busy ? "Posting…" : `Post ${kind}`}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
 export function Composer({
   threadId,
   replyTo,

@@ -9,7 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { api, post } from "./api";
-import { Composer, Message, QuickReply } from "./components";
+import { Composer, Message } from "./components";
 
 // A reader owns one contiguous window of a discussion. Navigation can replace
 // that window; paging extends it. Neither operation acknowledges any messages.
@@ -17,14 +17,12 @@ export function ThreadReader({
   route,
   listed,
   onNavigate,
-  onProject,
   onBack,
   onSearch,
   onRefresh,
 }) {
   const { threadId, archived } = route;
   const [detail, setDetail] = useState(null);
-  const [quickReply, setQuickReply] = useState(null);
   const [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false);
   const [error, setError] = useState(""),
@@ -174,7 +172,6 @@ export function ThreadReader({
           : "",
       );
       setDetail(next);
-      onProject(result.thread.project_id);
     } catch (e) {
       if (
         mounted.current &&
@@ -448,9 +445,6 @@ export function ThreadReader({
                   archived={archived}
                   messages={detail.messages}
                   onReply={setReplyTo}
-                  onQuickReply={(message, action) =>
-                    setQuickReply({ message, action })
-                  }
                   highlighted={highlight === m.id}
                   onNavigate={(id) => onNavigate({ messageId: id })}
                   onMarkRead={
@@ -493,18 +487,6 @@ export function ThreadReader({
                 onRefresh().catch((e) => {
                   if (mounted.current) setError(e.message);
                 });
-              }}
-            />
-          )}
-          {!archived && quickReply && (
-            <QuickReply
-              {...quickReply}
-              close={() => setQuickReply(null)}
-              onPosted={(message) => {
-                if (!mounted.current) return;
-                setQuickReply(null);
-                onNavigate({ messageId: message.id });
-                onRefresh().catch((e) => setError(e.message));
               }}
             />
           )}

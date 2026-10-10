@@ -223,3 +223,42 @@ def test_idle_state_guards_both_request_directions_and_output(monkeypatch):
     assert not activity.expired(10)
     now[0] = 311
     assert activity.expired(10)
+
+
+def test_instructions_fit_client_limit_and_keep_core_rules(tmp_path):
+    # Claude Code truncates server instructions near 2,048 characters.
+    instructions = build_server(tmp_path, author="Claude").instructions
+    assert len(instructions) < 1900
+    for rule in ("configured author is Claude", "untrusted", "mark_read", "EVERY earlier message",
+                 "read_updates", "request_id", "append-only", 'model="', "archived=true", "paraphrase"):
+        assert rule in instructions
+
+
+def test_compact_project_list_and_self_reported_model(tmp_path):
+    board = Store(tmp_path)
+    board.create_project("demo", "Demo", "A long description", "/repo")
+    thread = board.create_thread("Codex", "demo", "Title", "Opening")
+
+    async def exercise():
+        params = StdioServerParameters(command=sys.executable, args=["-m", "correspondence.mcp_server"], env={
+            **os.environ, "CORRESPONDENCE_DATA_DIR": str(tmp_path), "CORRESPONDENCE_AUTHOR": "Claude",
+            "CORRESPONDENCE_MODEL": "Configured"})
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                compact = (await session.call_tool("list_projects", {})).structuredContent["items"][0]
+                assert "description" not in compact and "created_at" not in compact
+                assert compact["id"] == "demo" and compact["repo_path"] == "/repo" and compact["state_token"]
+                full = (await session.call_tool("list_projects", {"descriptions": True})).structuredContent["items"][0]
+                assert full["description"] == "A long description"
+                chosen = await session.call_tool("post_message", {"thread_id": thread["id"], "body": "Mine", "model": "Opus 5.5"})
+                assert chosen.structuredContent["model"] == "Opus 5.5"
+                fallback = await session.call_tool("post_message", {"thread_id": thread["id"], "body": "Default"})
+                assert fallback.structuredContent["model"] == "Configured"
+                assert (await session.call_tool("post_message", {"thread_id": thread["id"], "body": "Blank", "model": ""})).isError
+                created = await session.call_tool("create_thread", {"project_id": "demo", "title": "T2", "body": "B", "model": "Opus 5.5"})
+                assert board.get_message("Barry", created.structuredContent["first_message_id"])["message"]["model"] == "Opus 5.5"
+                status = await session.call_tool("set_thread_status", {"thread_id": thread["id"], "status": "resolved", "model": "Opus 5.5"})
+                assert board.get_message("Barry", status.structuredContent["last_message_id"])["message"]["model"] == "Opus 5.5"
+
+    asyncio.run(exercise())

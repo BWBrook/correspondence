@@ -404,7 +404,12 @@ class Store:
                 ON r.thread_id=t.id AND r.author=? WHERE m.thread_id=t.id AND m.author NOT IN (?,?)
                 AND m.id>COALESCE(r.message_id,0))) ORDER BY t.updated_at DESC, t.id DESC LIMIT ?""",
                 (archived, project_id, project_id, unread_only, author, author, LEGACY_AUTHORS.get(author, author), limit)).fetchall()
-            return self._thread_records(con, [dict(row) for row in rows], author)
+            records = self._thread_records(con, [dict(row) for row in rows], author)
+            last_ids = [record["last_message_id"] for record in records if record["last_message_id"]]
+            excerpts = dict(con.execute(f"SELECT id,substr(body,1,320) FROM messages WHERE id IN ({','.join('?' for _ in last_ids)})", last_ids)) if last_ids else {}
+            for record in records:
+                record["last_excerpt"] = excerpts.get(record["last_message_id"])
+            return records
 
     def create_thread(self, author, project_id, title, body, kind="note", model=None, request_id=None):
         title = clean_text(title, "title", 300)

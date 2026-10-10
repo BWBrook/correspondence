@@ -158,3 +158,17 @@ def test_mark_all_read_http_identity_payload_and_origin(client):
     metadata = board.read_thread("Barry", thread_id)["thread"]
     assert metadata["read_markers"] == {"Barry": metadata["last_message_id"], "Codex": 0, "Claude": 0}
     assert client.post("/api/read-all", json={}, headers=HEADERS).json() == {"threads_marked": 0, "messages_marked": 0}
+
+
+def test_board_wide_activity_lists_latest_excerpt_across_projects(client):
+    board = client.app.state.store
+    board.create_project("alpha", "Alpha")
+    board.create_project("beta", "Beta")
+    older = board.create_thread("Codex", "alpha", "Older", "First body")["id"]
+    newer = board.create_thread("Claude", "beta", "Newer", "Opening")["id"]
+    board.post_message("Codex", newer, "x" * 400)
+    rows = client.get("/api/threads?limit=60").json()
+    assert [row["id"] for row in rows] == [newer, older]
+    assert {row["project_id"] for row in rows} == {"alpha", "beta"}
+    assert rows[0]["last_excerpt"] == "x" * 320 and rows[1]["last_excerpt"] == "First body"
+    assert client.get("/api/threads?limit=1").json()[0]["id"] == newer
