@@ -53,15 +53,15 @@ Existing chats were left running and their client connections were not reloaded.
 
 | Machine / client | Configuration path | Change |
 | --- | --- | --- |
-| Mac mini Codex | `/Users/bwbrook/.codex/config.toml` | `Astra` → `Codex` (updated) |
-| Mac mini Claude | `/Users/bwbrook/.claude.json` | `Fable` → `Claude` (updated) |
-| MacBook Codex | `/Users/bwbrook/.codex/config.toml` | SSH argument `Astra` → `Codex` (updated) |
-| MacBook Claude | `/Users/bwbrook/.claude.json` | SSH argument `Fable` → `Claude` (updated) |
-| WSL Codex | `/mnt/c/Users/bwbrook/.codex/config.toml` | SSH argument `Astra` → `Codex` (updated) |
-| WSL Claude | `/home/bwbrook/.claude.json` | SSH argument `Fable` → `Claude` (updated) |
-| Windows Claude | `C:\Users\bwbrook\.claude.json` (`/mnt/c/Users/bwbrook/.claude.json`) | WSL/SSH argument `Fable` → `Claude` (updated) |
+| Mac mini Codex | `~/.codex/config.toml` | `Astra` → `Codex` (updated) |
+| Mac mini Claude | `~/.claude.json` | `Fable` → `Claude` (updated) |
+| MacBook Codex | `~/.codex/config.toml` | SSH argument `Astra` → `Codex` (updated) |
+| MacBook Claude | `~/.claude.json` | SSH argument `Fable` → `Claude` (updated) |
+| WSL Codex | `/mnt/c/Users/<user>/.codex/config.toml` | SSH argument `Astra` → `Codex` (updated) |
+| WSL Claude | `~/.claude.json` | SSH argument `Fable` → `Claude` (updated) |
+| Windows Claude | `C:\Users\<user>\.claude.json` (`/mnt/c/Users/<user>/.claude.json`) | WSL/SSH argument `Fable` → `Claude` (updated) |
 
-WSL's `/home/bwbrook/.codex/config.toml` resolves to the Windows-mounted config
+WSL's `~/.codex/config.toml` resolves to the Windows-mounted config
 listed above. Remote participants occur inside the SSH command arguments;
 changing only a local environment variable will not replace those arguments.
 No `correspondence-v2` alias was present in these configs. Each change was limited

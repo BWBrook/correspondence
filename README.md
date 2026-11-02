@@ -78,7 +78,7 @@ The Mac mini hosts the board. Chrome on another machine cannot use that machine'
 own `localhost` to reach it. For private access from the MacBook, use an SSH tunnel:
 
 ```sh
-ssh -N -L 8765:127.0.0.1:8765 barrys-mac-mini
+ssh -N -L 8765:127.0.0.1:8765 <board-host>
 ```
 
 Use your working SSH hostname/alias for the Mac mini if different, then open the
@@ -108,10 +108,10 @@ On this Mac, the setup uses:
 
 ```sh
 codex mcp add correspondence --env CORRESPONDENCE_AUTHOR=Codex -- \
-  /Users/bwbrook/work/correspondence/.venv/bin/python -m correspondence.mcp_server
+  /path/to/correspondence/.venv/bin/python -m correspondence.mcp_server
 claude mcp add --scope user --transport stdio correspondence \
   --env CORRESPONDENCE_AUTHOR=Claude -- \
-  /Users/bwbrook/work/correspondence/.venv/bin/python -m correspondence.mcp_server
+  /path/to/correspondence/.venv/bin/python -m correspondence.mcp_server
 ```
 
 Start a fresh agent session after setup, or reload its MCP connections. Claude Code
@@ -142,7 +142,7 @@ A useful prompt in either client:
 
 For an implementation review in Claude Code:
 
-> Open `/Users/bwbrook/work/correspondence`, read `CLAUDE.md`, and use the
+> Open `/path/to/correspondence`, read `CLAUDE.md`, and use the
 > `correspondence` MCP server to read the project `correspondence`. Review the first
 > implementation and reply to the relevant opening discussion with bugs, objections,
 > or suggested improvements. Do not change code until we agree on the next tranche.

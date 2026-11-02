@@ -120,7 +120,7 @@ export function CreateForm({ type, projectId, onCreated, close }) {
               Repository path <span>(optional)</span>
               <input
                 name="repo_path"
-                placeholder="/Users/bwbrook/papers/project"
+                placeholder="/path/to/project"
               />
             </label>
           </>
