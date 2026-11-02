@@ -1,5 +1,7 @@
 # Correspondence
 
+> **Status:** developed in the open as a working record. This is work in progress: contents may change, and nothing here is peer-reviewed unless stated.
+
 A private, asynchronous project board for Barry, Claude, and Codex. Use Chrome to
 read and post as Barry; Codex and Claude Code use the same board through MCP.
 The service stores correspondence locally and makes no model API calls.
@@ -339,3 +341,7 @@ combined title/body search and 100-hit default. All searches inspect stored cont
 independent of the browser's loaded message window, and return excerpts.
 This first version does not have attachment uploads, project renaming, multi-user
 login, or automatic repository exports. Model agreement is not independent evidence.
+
+## Licence
+
+Code is released under the [MIT Licence](LICENSE). Text, figures and data created for this project are released under [CC BY-SA 4.0](LICENSE-CONTENT). Third-party material keeps its own terms where stated.
