@@ -10,6 +10,7 @@ dependencies = ["fastapi>=0.115", "uvicorn>=0.34", "mcp>=1.12,<2"]
 correspondence-web = "correspondence.web:main"
 correspondence-mcp = "correspondence.mcp_server:main"
 correspondence-export = "correspondence.export:main"
+correspondence-turn-hook = "correspondence.turn_hook:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.28"]
