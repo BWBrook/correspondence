@@ -797,6 +797,31 @@ label > span {
   line-height: 1.8;
   color: var(--muted);
 }
+.turns-header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 20px;
+  margin-bottom: 26px;
+}
+.turns-header h2 {
+  font-size: 26px;
+  margin: 0 0 6px;
+}
+.turns-header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.turn-body.clamped {
+  max-height: 9.5em;
+  overflow: hidden;
+}
+.turn-body.faded {
+  mask-image: linear-gradient(to bottom, #000 65%, transparent);
+}
+.turn-project {
+  font-size: 13px;
+  padding: 0;
+}
 .empty-list {
   padding: 25px;
   color: var(--muted);

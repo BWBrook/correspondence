@@ -24,6 +24,7 @@ import { CreateForm, UnreadCounts } from "./components";
 import { ProjectArchiveDialog } from "./ProjectArchiveDialog";
 import { ThreadReader } from "./ThreadReader";
 import { SearchDialog } from "./SearchDialog";
+import { TurnsPanel } from "./TurnsPanel";
 import "./style.css";
 
 function routeFromHash() {
@@ -298,6 +299,27 @@ function Board({ route, navigate }) {
       selectThread(result.id);
     }
   }
+  const emptyReader = (
+    <main className="reader">
+      <div className="empty-reader">
+        <h2>
+          {archived
+            ? "The conversation is preserved."
+            : "Room for another perspective."}
+        </h2>
+        <p>
+          {archived
+            ? "Select an archived project to read or search its discussions. Archived content stays outside the active board."
+            : "Choose a discussion, or start one. The reasoning stays here for the next time you return."}
+        </p>
+        {!archived && !projects.length && (
+          <button onClick={() => setModal("project")}>
+            <Plus size={17} /> Create your first project
+          </button>
+        )}
+      </div>
+    </main>
+  );
   return (
     <div className={`app ${threadId ? "reading" : ""}`}>
       <aside className="sidebar">
@@ -599,26 +621,15 @@ function Board({ route, navigate }) {
           onRefresh={refreshCounts}
           onSearch={() => setSearchScope("thread")}
         />
+      ) : !archived ? (
+        <TurnsPanel
+          projectId={projectId}
+          projectNames={projectNames}
+          onOpenProject={selectProject}
+          fallback={emptyReader}
+        />
       ) : (
-        <main className="reader">
-          <div className="empty-reader">
-            <h2>
-              {archived
-                ? "The conversation is preserved."
-                : "Room for another perspective."}
-            </h2>
-            <p>
-              {archived
-                ? "Select an archived project to read or search its discussions. Archived content stays outside the active board."
-                : "Choose a discussion, or start one. The reasoning stays here for the next time you return."}
-            </p>
-            {!archived && !projects.length && (
-              <button onClick={() => setModal("project")}>
-                <Plus size={17} /> Create your first project
-              </button>
-            )}
-          </div>
-        </main>
+        emptyReader
       )}
       {searchScope && (
         <SearchDialog

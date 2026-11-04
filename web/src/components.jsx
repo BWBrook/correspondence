@@ -160,6 +160,29 @@ export function CreateForm({ type, projectId, onCreated, close }) {
     </Modal>
   );
 }
+const markdownComponents = {
+  a: ({ children, href }) => (
+    <a href={href} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  ),
+  img: ({ alt }) => (
+    <span className="image-reference">
+      [Image: {alt || "attached reference"}]
+    </span>
+  ),
+};
+
+export function BoardMarkdown({ children }) {
+  return (
+    <div className="markdown">
+      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {children}
+      </Markdown>
+    </div>
+  );
+}
+
 export function Message({
   message,
   onReply,
@@ -221,25 +244,7 @@ export function Message({
             {authorLabel(parent?.author) || "message"} #{message.parent_id}
           </a>
         )}
-        <div className="markdown">
-          <Markdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              a: ({ children, href }) => (
-                <a href={href} target="_blank" rel="noreferrer noopener">
-                  {children}
-                </a>
-              ),
-              img: ({ alt }) => (
-                <span className="image-reference">
-                  [Image: {alt || "attached reference"}]
-                </span>
-              ),
-            }}
-          >
-            {message.body}
-          </Markdown>
-        </div>
+        <BoardMarkdown>{message.body}</BoardMarkdown>
         {!archived && (
           <div className="message-actions">
             <button

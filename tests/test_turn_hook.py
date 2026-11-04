@@ -2,7 +2,7 @@ import json
 import subprocess
 import sys
 
-from correspondence.turn_hook import last_text_from_transcript, record
+from correspondence.turn_hook import closing_from_transcript, record
 
 
 def run_hook(tmp_path, stdin, agent="Codex"):
@@ -31,14 +31,14 @@ def test_claude_message_falls_back_to_last_assistant_text_in_transcript(tmp_path
     entries = [
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Earlier."}]}},
         {"type": "user", "message": {"content": "tool result"}},
-        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Closing."}, {"type": "tool_use", "name": "x"}]}},
+        {"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "Closing."}, {"type": "tool_use", "name": "x"}]}},
         {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "y"}]}},
         "not json",
     ]
     transcript.write_text("\n".join(e if isinstance(e, str) else json.dumps(e) for e in entries) + "\n")
-    assert last_text_from_transcript(str(transcript)) == "Closing."
+    assert closing_from_transcript(str(transcript)) == ("Closing.", "claude-x")
     entry = record({"session_id": "s", "transcript_path": str(transcript)}, "Claude", "p")
-    assert entry["message"] == "Closing." and entry["turn_id"] is None
+    assert entry["message"] == "Closing." and entry["model"] == "claude-x" and entry["turn_id"] is None
 
 
 def test_bad_input_never_fails_the_turn(tmp_path):

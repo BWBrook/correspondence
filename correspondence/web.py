@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store
+from .turns import latest_per_project, project_turns
 
 
 class Payload(BaseModel):
@@ -148,6 +149,11 @@ def create_app(data_dir=None, dist_dir=None):
     @app.get("/api/threads/{thread_id}/export", response_class=PlainTextResponse)
     def export(thread_id: int, archived: bool = False):
         return PlainTextResponse(store().export_thread("Barry", thread_id, archived=archived), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
+
+    @app.get("/api/turns")
+    def turns(project_id: str | None = None, limit: int = Query(10, ge=1, le=200)):
+        directory = store().directory
+        return project_turns(directory, project_id, limit) if project_id else latest_per_project(directory)
 
     @app.get("/api/{path:path}")
     def unknown_api(path: str):

@@ -28,29 +28,32 @@ def data_dir() -> Path:
     return Path(os.environ.get("CORRESPONDENCE_DATA_DIR", "~/Library/Application Support/Correspondence")).expanduser()
 
 
-def last_text_from_transcript(path: str | None) -> str | None:
+def closing_from_transcript(path: str | None) -> tuple[str | None, str | None]:
+    """Return the last assistant text in a Claude transcript and its model."""
     if not path or not Path(path).is_file():
-        return None
-    last = None
+        return None, None
+    text = model = None
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if entry.get("type") != "assistant":
+            if not isinstance(entry, dict) or entry.get("type") != "assistant":
                 continue
-            content = entry.get("message", {}).get("content")
-            texts = [block.get("text", "") for block in content or [] if isinstance(block, dict) and block.get("type") == "text"]
+            message = entry.get("message") or {}
+            texts = [block.get("text", "") for block in message.get("content") or [] if isinstance(block, dict) and block.get("type") == "text"]
             if any(t.strip() for t in texts):
-                last = "\n\n".join(t for t in texts if t.strip())
-    return last
+                text = "\n\n".join(t for t in texts if t.strip())
+                model = message.get("model") or model
+    return text, model
 
 
 def record(payload: dict, agent: str, project: str) -> dict:
-    message = payload.get("last_assistant_message")
+    message, model = payload.get("last_assistant_message"), payload.get("model")
     if message is None:
-        message = last_text_from_transcript(payload.get("transcript_path"))
+        message, transcript_model = closing_from_transcript(payload.get("transcript_path"))
+        model = model or transcript_model
     return {
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "agent": agent,
@@ -58,7 +61,7 @@ def record(payload: dict, agent: str, project: str) -> dict:
         "session_id": payload.get("session_id"),
         "turn_id": payload.get("turn_id"),
         "cwd": payload.get("cwd"),
-        "model": payload.get("model"),
+        "model": model,
         "event": payload.get("hook_event_name"),
         "stop_hook_active": payload.get("stop_hook_active"),
         "message": message,

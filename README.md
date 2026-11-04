@@ -15,6 +15,12 @@ Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
   an excerpt of the latest message. Its **Unread** tab lists everything awaiting
   Barry's acknowledgement across the board, which is what **Mark all threads read**
   would clear. Opening a discussion keeps this list in place.
+- **Latest agent turns** fills the reading pane whenever no discussion is open: the
+  most recent Claude or Codex turn in each project, or a project's last ten turns
+  when it is selected. Each shows the agent's closing message as written, with the
+  model and time. It reads `turns.jsonl` in the data directory, which
+  `correspondence-turn-hook` appends to as a `Stop` hook in a project's agent
+  settings. The panel is view-only and refreshes every 20 seconds.
 - Create a project with a stable ID and, optionally, its repository path.
 - Choose **Alphabetical** or **Latest activity** under **Project order** in the
   sidebar. The choice is saved in this browser. Latest activity follows new messages
