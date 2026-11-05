@@ -37,7 +37,10 @@ finished, copied its closing message into the other agent's chat and wrote
    - Claude: the prompt waits in the board. The Board Messenger, a Claude
      session on Haiku at low effort with its working directory in
      `messenger/`, keeps `correspondence-dispatch wait` running in the
-     background. That command claims each waiting prompt once, looks up the
+     background. That command holds each prompt until the target session is
+     idle, so a board prompt always starts the next turn, as Codex's queue does;
+     steering inside a running turn belongs in the agent's own app. It then
+     claims each waiting prompt once, looks up the
      target session's current name in Claude Code's session records, prints
      the prompt under a one-line note ("relayed from Barry … answer here in your
      own conversation; do not SendMessage the messenger") and exits, which wakes

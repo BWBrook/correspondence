@@ -9,7 +9,9 @@ Board Messenger, a Claude session on this Mac, collects them::
     correspondence-dispatch done 12 delivered
     correspondence-dispatch done 12 failed "No session named Silurian Plants"
 
-``wait`` prints one JSON line per prompt: ``{"dispatch", "to", "project",
+``wait`` holds each prompt until its target session is idle, so a board prompt
+starts the next turn instead of landing inside a running one, as with Codex's
+queue. It prints one JSON line per prompt: ``{"dispatch", "to", "project",
 "message"}``, where ``to`` is the target session's current name in the Claude
 app, read from Claude Code's session records, and ``message`` is Barry's text
 under a one-line note telling the recipient to answer in its own conversation
@@ -79,20 +81,27 @@ def messenger_listening(directory: Path) -> bool:
         return False
 
 
+def collect(store) -> list[dict]:
+    """Claim the waiting prompts whose target session is idle, so a board prompt
+    always starts the next turn and never lands inside a running one."""
+    ready = []
+    for dispatch in store.waiting_claude_dispatches():
+        session = claude_session(dispatch["session_id"])
+        if session is None:
+            store.finish_dispatch(dispatch["id"], False, "The main Claude session is not running on this Mac")
+        elif session.get("status") == "idle" and store.claim_dispatch(dispatch["id"]):
+            ready.append({"dispatch": dispatch["id"], "to": session["name"],
+                          "project": dispatch["project_id"], "message": f"{RELAY_NOTE}\n\n{dispatch['body']}"})
+    return ready
+
+
 def wait(store, poll: float) -> None:
     heartbeat, parent = store.directory / HEARTBEAT, os.getppid()
     while True:
         if os.getppid() != parent:
             return  # orphaned: whoever would read our output is gone, so claim nothing
         heartbeat.touch()
-        ready = []
-        for dispatch in store.claim_claude_dispatches():
-            session = claude_session(dispatch["session_id"])
-            if session is None:
-                store.finish_dispatch(dispatch["id"], False, "The main Claude session is not running on this Mac")
-            else:
-                ready.append({"dispatch": dispatch["id"], "to": session["name"],
-                              "project": dispatch["project_id"], "message": f"{RELAY_NOTE}\n\n{dispatch['body']}"})
+        ready = collect(store)
         if ready:
             for line in ready:
                 print(json.dumps(line, ensure_ascii=False), flush=True)

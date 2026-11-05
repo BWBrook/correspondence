@@ -94,7 +94,7 @@ def test_claude_prompt_waits_for_the_messenger_and_is_claimed_once(claude, capsy
     note, body = event["message"].split("\n\n", 1)
     assert body == "Line one.\nLine two." and "do not SendMessage" in note
     assert client.get("/api/projects/p/agents").json()["messenger_listening"] is True
-    assert store.claim_claude_dispatches() == []
+    assert store.waiting_claude_dispatches() == [] and store.claim_dispatch(sent["id"]) is False
     assert client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).status_code == 409
     store.finish_dispatch(sent["id"], True, "")
     assert client.get("/api/dispatches?project_id=p").json()[0]["status"] == "delivered"
@@ -108,7 +108,7 @@ def test_claude_prompt_fails_when_its_session_is_not_running(claude, capsys):
     store = Store(tmp_path)
     with store.connect(write=True) as con:
         con.execute("INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at) VALUES ('p','Claude','other-session-id','y','queued','2026')")
-    (tmp_path / "claude-sessions" / "3.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "other-session-id", "name": "Other"}))
+    (tmp_path / "claude-sessions" / "3.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "other-session-id", "name": "Other", "status": "idle"}))
     wait(store, poll=0.01)
     assert [json.loads(line)["to"] for line in capsys.readouterr().out.splitlines()] == ["Other"]
     failed = [d for d in store.list_dispatches("p") if d["id"] == first["id"]][0]
@@ -153,3 +153,15 @@ def test_archive_carries_pins_and_dispatches(tmp_path):
     with store.connect() as con:
         assert con.execute("SELECT project_id FROM project_agents").fetchone()[0] == archived["id"]
         assert con.execute("SELECT project_id FROM dispatches").fetchone()[0] == archived["id"]
+
+
+def test_claude_prompt_waits_while_its_session_is_busy(claude):
+    from correspondence.dispatch import collect
+    client, tmp_path = claude
+    record = tmp_path / "claude-sessions" / "2.json"
+    record.write_text(record.read_text().replace('"idle"', '"busy"'))
+    sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
+    store = Store(tmp_path)
+    assert collect(store) == [] and store.waiting_claude_dispatches()[0]["id"] == sent["id"]
+    record.write_text(record.read_text().replace('"busy"', '"idle"'))
+    assert [e["dispatch"] for e in collect(store)] == [sent["id"]] and collect(store) == []

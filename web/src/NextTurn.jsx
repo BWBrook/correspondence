@@ -18,11 +18,14 @@ ${quoted}
 Take your next turn.`;
 }
 
-function dispatchState(d) {
+function dispatchState(d, live) {
   if (d.status === "failed") return `Failed: ${d.detail || "no detail"}`;
   if (d.answered_at) return `Answered ${shortTime(d.answered_at)}`;
   if (d.status === "delivered") return "Delivered, waiting for a reply";
-  return d.claimed_at ? "Handed to the messenger" : "Waiting for the messenger";
+  if (d.claimed_at) return "Handed to the messenger";
+  if (d.target === "Claude" && live && live.status !== "idle")
+    return `Waiting for ${live.name} to finish its turn`;
+  return "Waiting for the messenger";
 }
 
 function MainSessions({ projectId, agents, onChange }) {
@@ -224,7 +227,7 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
                 To {d.target} · {shortTime(d.requested_at)}
               </span>
               <span>
-                {dispatchState(d)}
+                {dispatchState(d, agents.claude_live)}
                 {d.status === "queued" && !d.claimed_at && (
                   <button className="text-button" onClick={() => cancel(d.id)}>
                     Cancel

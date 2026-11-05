@@ -425,15 +425,16 @@ class Store:
                         ("delivered" if delivered else "failed", now() if delivered else None, (detail or "")[:2000], dispatch_id))
             return self._require(con, "dispatches", dispatch_id)
 
-    def claim_claude_dispatches(self):
-        """Hand every unclaimed queued Claude prompt to the messenger exactly once."""
-        with self.connect(write=True) as con:
-            rows = [dict(r) for r in con.execute(
+    def waiting_claude_dispatches(self):
+        with self.connect() as con:
+            return [dict(r) for r in con.execute(
                 "SELECT * FROM dispatches WHERE target='Claude' AND status='queued' AND claimed_at IS NULL ORDER BY id")]
-            stamp = now()
-            for row in rows:
-                con.execute("UPDATE dispatches SET claimed_at=? WHERE id=?", (stamp, row["id"]))
-            return rows
+
+    def claim_dispatch(self, dispatch_id):
+        """Hand one waiting prompt to the messenger; False if someone else already took it."""
+        with self.connect(write=True) as con:
+            return con.execute("UPDATE dispatches SET claimed_at=? WHERE id=? AND status='queued' AND claimed_at IS NULL",
+                               (now(), dispatch_id)).rowcount == 1
 
     def cancel_dispatch(self, dispatch_id):
         with self.connect(write=True) as con:
