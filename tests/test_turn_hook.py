@@ -39,6 +39,8 @@ def test_claude_message_falls_back_to_last_assistant_text_in_transcript(tmp_path
     assert closing_from_transcript(str(transcript)) == ("Closing.", "claude-x")
     entry = record({"session_id": "s", "transcript_path": str(transcript)}, "Claude", "p")
     assert entry["message"] == "Closing." and entry["model"] == "claude-x" and entry["turn_id"] is None
+    entry = record({"last_assistant_message": "From payload.", "transcript_path": str(transcript)}, "Claude", "p")
+    assert entry["message"] == "From payload." and entry["model"] == "claude-x"
 
 
 def test_bad_input_never_fails_the_turn(tmp_path):

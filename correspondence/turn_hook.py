@@ -51,8 +51,9 @@ def closing_from_transcript(path: str | None) -> tuple[str | None, str | None]:
 
 def record(payload: dict, agent: str, project: str) -> dict:
     message, model = payload.get("last_assistant_message"), payload.get("model")
-    if message is None:
-        message, transcript_model = closing_from_transcript(payload.get("transcript_path"))
+    if message is None or model is None:
+        transcript_message, transcript_model = closing_from_transcript(payload.get("transcript_path"))
+        message = transcript_message if message is None else message
         model = model or transcript_model
     return {
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
