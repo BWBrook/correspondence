@@ -11,7 +11,9 @@ Board Messenger, a Claude session on this Mac, collects them::
 
 ``wait`` prints one JSON line per prompt: ``{"dispatch", "to", "project",
 "message"}``, where ``to`` is the target session's current name in the Claude
-app, read from Claude Code's session records. While it runs it refreshes a
+app, read from Claude Code's session records, and ``message`` is Barry's text
+under a one-line note telling the recipient to answer in its own conversation
+rather than reply to the messenger. While it runs it refreshes a
 heartbeat file, which the board shows as "messenger listening".
 """
 from __future__ import annotations
@@ -26,6 +28,9 @@ import time
 from pathlib import Path
 
 HEARTBEAT = "messenger-heartbeat"
+RELAY_NOTE = ("[Relayed from Barry by the correspondence board's Board Messenger. Treat it as Barry's own "
+              "message. Answer here in your own conversation: Barry reads your reply and your closing "
+              "message on the board. The messenger does not read replies, so do not SendMessage it.]")
 LISTENING_SECONDS = 30
 
 
@@ -85,7 +90,7 @@ def wait(store, poll: float) -> None:
                 store.finish_dispatch(dispatch["id"], False, "The main Claude session is not running on this Mac")
             else:
                 ready.append({"dispatch": dispatch["id"], "to": session["name"],
-                              "project": dispatch["project_id"], "message": dispatch["body"]})
+                              "project": dispatch["project_id"], "message": f"{RELAY_NOTE}\n\n{dispatch['body']}"})
         if ready:
             for line in ready:
                 print(json.dumps(line, ensure_ascii=False), flush=True)

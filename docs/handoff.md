@@ -39,7 +39,10 @@ finished, copied its closing message into the other agent's chat and wrote
      `messenger/`, keeps `correspondence-dispatch wait` running in the
      background. That command claims each waiting prompt once, looks up the
      target session's current name in Claude Code's session records, prints
-     the prompt and exits, which wakes the messenger. The messenger relays the
+     the prompt under a one-line note ("relayed from Barry … answer here in your
+     own conversation; do not SendMessage the messenger") and exits, which wakes
+     the messenger. Without the note, a recipient answers a relayed question by
+     replying to the messenger, where Barry never sees it. The messenger relays the
      text unchanged with `SendMessage`, records the outcome with
      `correspondence-dispatch done`, and starts listening again. Idle listening
      costs no tokens. The messenger's settings deny file, web and board tools.

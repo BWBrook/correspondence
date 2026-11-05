@@ -90,7 +90,9 @@ def test_claude_prompt_waits_for_the_messenger_and_is_claimed_once(claude, capsy
     store = Store(tmp_path)
     wait(store, poll=0.01)
     event = json.loads(capsys.readouterr().out)
-    assert event == {"dispatch": sent["id"], "to": "Silurian Plants", "project": "p", "message": "Line one.\nLine two."}
+    assert {k: event[k] for k in ("dispatch", "to", "project")} == {"dispatch": sent["id"], "to": "Silurian Plants", "project": "p"}
+    note, body = event["message"].split("\n\n", 1)
+    assert body == "Line one.\nLine two." and "do not SendMessage" in note
     assert client.get("/api/projects/p/agents").json()["messenger_listening"] is True
     assert store.claim_claude_dispatches() == []
     assert client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).status_code == 409
