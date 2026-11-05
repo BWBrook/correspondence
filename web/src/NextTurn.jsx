@@ -161,15 +161,19 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
         {AGENTS.map((agent) => (
           <button
             key={agent}
-            className={agent === suggested ? "" : "outline"}
+            className={agent === suggested && !blocked(agent) ? "" : "outline"}
             disabled={Boolean(sending) || Boolean(blocked(agent)) || !text.trim()}
             title={blocked(agent) || `Send this prompt to ${agent}`}
             onClick={() => send(agent)}
           >
-            {sending === agent ? "Sending…" : `Send to ${agent}`}
+            {sending === agent
+              ? "Sending…"
+              : `Send to ${agent}${agent === "Claude" ? " (not yet)" : ""}`}
           </button>
         ))}
-        <span className="hint">Claude: coming with the Board Messenger.</span>
+        <span className="hint">
+          Claude delivery arrives with the Board Messenger.
+        </span>
         {edited && (
           <button
             className="text-button"
