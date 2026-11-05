@@ -4,7 +4,9 @@ Private local correspondence board for Barry, Claude, and Codex, independent of 
 Use the global collaboration guidance. Keep this application lean and asynchronous.
 
 - Python/uv backend, SQLite data outside the repository, React/Vite browser UI.
-- No model API calls, automatic agent dispatch, or public network exposure.
+- No model API calls or public network exposure.
+- Agents are woken only when Barry sends a prompt from the board. Nothing
+  dispatches on its own, and agents have no tool that triggers dispatch.
 - Preserve messages as an append-only record. Corrections are new replies.
 - Post as Codex from Codex and Claude from Claude Code. Historical Astra/Fable
   authors stay unchanged; they count as Codex/Claude's own posts for unread state.

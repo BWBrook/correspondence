@@ -15,6 +15,8 @@ from uuid import uuid4
 AUTHORS = {"Barry", "Claude", "Codex"}
 LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
+DISPATCH_TARGETS = {"Claude", "Codex"}
+DISPATCH_GAP_SECONDS = 15
 
 
 class NotFound(ValueError):
@@ -132,6 +134,20 @@ class Store:
                 if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise sqlite3.IntegrityError("Integrity failure during participant migration")
                 con.execute("PRAGMA user_version=4")
+            if version < 5:
+                con.execute("""CREATE TABLE IF NOT EXISTS project_agents (
+                    project_id TEXT NOT NULL REFERENCES projects(id),
+                    agent TEXT NOT NULL CHECK(agent IN ('Claude','Codex')),
+                    session_id TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project_id, agent))""")
+                con.execute("""CREATE TABLE IF NOT EXISTS dispatches (
+                    id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                    target TEXT NOT NULL CHECK(target IN ('Claude','Codex')),
+                    session_id TEXT NOT NULL, body TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('queued','delivered','failed')),
+                    requested_at TEXT NOT NULL, delivered_at TEXT, detail TEXT)""")
+                con.execute("CREATE INDEX IF NOT EXISTS dispatches_project ON dispatches(project_id, id)")
+                con.execute("PRAGMA user_version=5")
             con.commit()
         except Exception:
             con.rollback()
@@ -303,6 +319,8 @@ class Store:
         con.execute("PRAGMA defer_foreign_keys=ON")
         con.execute("UPDATE projects SET id=? WHERE id=?", (new_id, old_id))
         con.execute("UPDATE threads SET project_id=? WHERE project_id=?", (new_id, old_id))
+        con.execute("UPDATE project_agents SET project_id=? WHERE project_id=?", (new_id, old_id))
+        con.execute("UPDATE dispatches SET project_id=? WHERE project_id=?", (new_id, old_id))
 
     @staticmethod
     def _project_state(con, project_id, expected_state):
@@ -350,6 +368,64 @@ class Store:
             self._rekey_project(con, project_id, restored_id)
             con.execute("UPDATE projects SET name=?,archived_at=NULL,archived_original_id=NULL,state_token=? WHERE id=?", (name, uuid4().hex, restored_id))
             return self._require(con, "projects", restored_id)
+
+    def project_agents(self, project_id=None):
+        """Main Claude session and Codex thread per project: {project: {agent: session}}."""
+        with self.connect() as con:
+            if project_id is not None:
+                self._project(con, project_id)
+            rows = con.execute("SELECT project_id, agent, session_id FROM project_agents"
+                               + (" WHERE project_id=?" if project_id is not None else ""),
+                               (project_id,) if project_id is not None else ()).fetchall()
+        pins = {}
+        for row in rows:
+            pins.setdefault(row["project_id"], {})[row["agent"]] = row["session_id"]
+        return pins.get(project_id, {}) if project_id is not None else pins
+
+    def set_project_agent(self, project_id, agent, session_id):
+        if agent not in DISPATCH_TARGETS:
+            raise ValueError("Agent must be Claude or Codex")
+        if session_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{7,99}", session_id):
+            raise ValueError("Session id must be 8–100 letters, digits or hyphens")
+        with self.connect(write=True) as con:
+            self._project(con, project_id)
+            if session_id is None:
+                con.execute("DELETE FROM project_agents WHERE project_id=? AND agent=?", (project_id, agent))
+            else:
+                con.execute("""INSERT INTO project_agents(project_id,agent,session_id,updated_at) VALUES (?,?,?,?)
+                    ON CONFLICT(project_id,agent) DO UPDATE SET session_id=excluded.session_id, updated_at=excluded.updated_at""",
+                            (project_id, agent, session_id, now()))
+        return self.project_agents(project_id)
+
+    def create_dispatch(self, project_id, target, body):
+        """Record Barry's prompt for a project's main agent; refuse a duplicate in flight."""
+        if target not in DISPATCH_TARGETS:
+            raise ValueError("Target must be Claude or Codex")
+        body = clean_text(body, "Prompt", 50_000)
+        with self.connect(write=True) as con:
+            self._project(con, project_id)
+            pin = con.execute("SELECT session_id FROM project_agents WHERE project_id=? AND agent=?", (project_id, target)).fetchone()
+            if pin is None:
+                raise Conflict(f"Set this project's main {target} session first")
+            cutoff = datetime.fromtimestamp(time.time() - DISPATCH_GAP_SECONDS, timezone.utc).isoformat(timespec="microseconds")
+            if con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND target=?
+                    AND (status='queued' OR (status='delivered' AND delivered_at>?))""", (project_id, target, cutoff)).fetchone():
+                raise Conflict(f"A prompt to {target} was just sent; wait a few seconds before sending another")
+            cursor = con.execute("INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at) VALUES (?,?,?,?,'queued',?)",
+                                 (project_id, target, pin["session_id"], body, now()))
+            return self._require(con, "dispatches", cursor.lastrowid)
+
+    def finish_dispatch(self, dispatch_id, delivered, detail):
+        with self.connect(write=True) as con:
+            con.execute("UPDATE dispatches SET status=?, delivered_at=?, detail=? WHERE id=? AND status='queued'",
+                        ("delivered" if delivered else "failed", now() if delivered else None, (detail or "")[:2000], dispatch_id))
+            return self._require(con, "dispatches", dispatch_id)
+
+    def list_dispatches(self, project_id, limit=10):
+        with self.connect() as con:
+            self._project(con, project_id)
+            return [dict(row) for row in con.execute(
+                "SELECT * FROM dispatches WHERE project_id=? ORDER BY id DESC LIMIT ?", (project_id, limit))]
 
     def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None):
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", id) or len(id) > 100:

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, shortTime, stamp } from "./api";
 import { BoardMarkdown } from "./components";
+import { NextTurn } from "./NextTurn";
 
 function ago(value) {
   const minutes = Math.floor((Date.now() - new Date(value)) / 60000);
@@ -44,9 +45,9 @@ function ClampedBody({ text }) {
 export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback }) {
   const [turns, setTurns] = useState(null);
   const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let live = true;
-    setTurns(null);
     const path = projectId
       ? `/turns?project_id=${encodeURIComponent(projectId)}&limit=10`
       : "/turns";
@@ -67,8 +68,12 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
       live = false;
       clearInterval(poll);
     };
-  }, [projectId]);
+  }, [projectId, reload]);
+  useEffect(() => setTurns(null), [projectId]);
   if (turns && !turns.length && !error) return fallback;
+  const lastTurn = (turns || []).find(
+    (turn) => turn.role !== "other" && !turn.automation,
+  );
   return (
     <main className="reader turns-panel" aria-label="Agent turns">
       <header className="turns-header">
@@ -84,9 +89,17 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
           {error}
         </p>
       )}
+      {projectId && turns && (
+        <NextTurn
+          projectId={projectId}
+          projectName={projectNames[projectId] || projectId}
+          lastTurn={lastTurn}
+          onPinsChanged={() => setReload((n) => n + 1)}
+        />
+      )}
       {(turns || []).map((turn, index) => (
         <article
-          className="message turn"
+          className={`message turn${turn.role === "other" || turn.automation ? " other-session" : ""}`}
           key={`${turn.recorded_at}-${turn.agent}-${index}`}
         >
           <div className={`avatar ${turn.agent.toLowerCase()}`}>
@@ -96,6 +109,11 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
             <header className="message-heading">
               <strong>{turn.agent}</strong>
               {turn.model && <span className="model">{turn.model}</span>}
+              {(turn.role === "other" || turn.automation) && (
+                <span className="session-tag">
+                  {turn.automation ? "automation" : "other session"}
+                </span>
+              )}
               {!projectId && (
                 <button
                   className="text-button turn-project"

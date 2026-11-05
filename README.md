@@ -20,7 +20,19 @@ Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
   when it is selected. Each shows the agent's closing message as written, with the
   model and time. It reads `turns.jsonl` in the data directory, which
   `correspondence-turn-hook` appends to as a `Stop` hook in a project's agent
-  settings. The panel is view-only and refreshes every 20 seconds.
+  settings. The panel refreshes every 20 seconds. Turns from a session other
+  than the project's main one (an advisor, an automation heartbeat) are greyed
+  and never count as the latest turn.
+- **Next turn** sits above a project's turns. It is prefilled with a Continue
+  prompt that quotes the latest agent's closing message word for word; edit it
+  to steer. **Send to Codex** queues it on the project's main Codex thread with
+  `codex queue`, which the Codex desktop app picks up. Send to Claude needs the
+  Board Messenger and is not available yet. Choose each agent's main session
+  under **Main sessions**. Each send is recorded as Queued, Delivered or
+  Failed, then Answered when that session's next turn appears in the log. A
+  second prompt to the same agent within 15 seconds is refused. Only the
+  browser can send; agents have no dispatch tool. See
+  [hand-off design](docs/handoff.md).
 - Create a project with a stable ID and, optionally, its repository path.
 - Choose **Alphabetical** or **Latest activity** under **Project order** in the
   sidebar. The choice is saved in this browser. Latest activity follows new messages

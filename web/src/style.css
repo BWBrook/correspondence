@@ -822,6 +822,91 @@ label > span {
   font-size: 13px;
   padding: 0;
 }
+.next-turn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 28px;
+  background: var(--sidebar);
+}
+.next-turn header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.next-turn h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.next-turn .hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+.next-turn textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+  background: #fff;
+  color: var(--ink);
+}
+.next-turn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  align-items: center;
+}
+.dispatches {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.dispatches li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+.dispatches li.failed {
+  color: #9b2c2c;
+}
+.main-sessions {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.main-sessions summary {
+  cursor: pointer;
+  color: var(--teal);
+}
+.main-sessions label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.main-sessions select {
+  font: inherit;
+  max-width: 100%;
+}
+.turn.other-session {
+  opacity: 0.55;
+}
+.session-tag {
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 7px;
+  color: var(--muted);
+}
 .empty-list {
   padding: 25px;
   color: var(--muted);

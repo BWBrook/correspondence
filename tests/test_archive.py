@@ -180,7 +180,7 @@ def test_concurrent_schema1_migration_and_reopen_do_not_rehash(board):
         reopened = list(pool.map(lambda _: Store(board.directory), range(6)))
     assert records(reopened[0])["requests"] == before["requests"]
     with reopened[0].connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
     assert reopened[0].list_projects("Barry", archived=True)[0]["id"] == archive["id"]
 
@@ -324,4 +324,4 @@ def test_schema2_upgrade_generates_tokens_once_and_preserves_archives(board):
     assert records(Store(board.directory)) == after
     assert stores[0].list_projects("Barry", archived=True)[0]["id"] == archived["id"]
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 5

@@ -13,7 +13,8 @@ from pydantic import BaseModel, ConfigDict
 
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store
-from .turns import latest_per_project, project_turns
+from .dispatch import deliver_codex
+from .turns import answered_at, latest_per_project, project_sessions, project_turns, read_turns
 
 
 class Payload(BaseModel):
@@ -52,6 +53,17 @@ class ReadMarker(Payload):
 
 class StatusChange(Payload):
     status: str
+
+
+class AgentPin(Payload):
+    agent: str
+    session_id: str | None
+
+
+class DispatchCreate(Payload):
+    project_id: str
+    target: str
+    body: str
 
 
 def create_app(data_dir=None, dist_dir=None):
@@ -152,8 +164,31 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/turns")
     def turns(project_id: str | None = None, limit: int = Query(10, ge=1, le=200)):
-        directory = store().directory
-        return project_turns(directory, project_id, limit) if project_id else latest_per_project(directory)
+        directory, pins = store().directory, store().project_agents()
+        return project_turns(directory, project_id, limit, pins) if project_id else latest_per_project(directory, pins)
+
+    @app.get("/api/projects/{project_id}/agents")
+    def project_agents(project_id: str):
+        return {"pins": store().project_agents(project_id), "sessions": project_sessions(store().directory, project_id)}
+
+    @app.post("/api/projects/{project_id}/agents")
+    def set_project_agent(project_id: str, payload: AgentPin):
+        store().set_project_agent(project_id, payload.agent, payload.session_id)
+        return project_agents(project_id)
+
+    @app.get("/api/dispatches")
+    def dispatches(project_id: str, limit: int = Query(10, ge=1, le=100)):
+        turns = read_turns(store().directory)
+        return [{**d, "answered_at": answered_at(turns, d) if d["status"] == "delivered" else None}
+                for d in store().list_dispatches(project_id, limit)]
+
+    @app.post("/api/dispatches", status_code=201)
+    def create_dispatch(payload: DispatchCreate):
+        if payload.target == "Claude":
+            raise Conflict("Sending to Claude needs the Board Messenger, which is not set up yet")
+        dispatch = store().create_dispatch(payload.project_id, payload.target, payload.body)
+        delivered, detail = deliver_codex(dispatch["session_id"], dispatch["body"])
+        return {**store().finish_dispatch(dispatch["id"], delivered, detail), "answered_at": None}
 
     @app.get("/api/{path:path}")
     def unknown_api(path: str):
