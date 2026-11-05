@@ -2,8 +2,6 @@ import React, { useEffect, useState } from "react";
 import { api, post, shortTime, stamp } from "./api";
 
 const AGENTS = ["Claude", "Codex"];
-const CLAUDE_PENDING =
-  "Sending to Claude needs the Board Messenger, which is not set up yet.";
 
 export function continuePrompt(turn, projectName) {
   if (!turn) return "Continue: take your next turn on this project.";
@@ -24,7 +22,7 @@ function dispatchState(d) {
   if (d.status === "failed") return `Failed: ${d.detail || "no detail"}`;
   if (d.answered_at) return `Answered ${shortTime(d.answered_at)}`;
   if (d.status === "delivered") return "Delivered, waiting for a reply";
-  return "Queued";
+  return d.claimed_at ? "Handed to the messenger" : "Waiting for the messenger";
 }
 
 function MainSessions({ projectId, agents, onChange }) {
@@ -110,6 +108,25 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
       clearInterval(poll);
     };
   }, [projectId]);
+  const pending = dispatches.some((d) => d.status === "queued");
+  useEffect(() => {
+    if (!pending) return undefined;
+    const poll = setInterval(() => {
+      api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
+        .then(setDispatches)
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(poll);
+  }, [pending, projectId]);
+  async function cancel(id) {
+    setError("");
+    try {
+      const result = await post(`/dispatches/${id}/cancel`, {});
+      setDispatches((list) => list.map((d) => (d.id === id ? result : d)));
+    } catch (e) {
+      setError(e.message);
+    }
+  }
   const suggested = lastTurn
     ? AGENTS.find((agent) => agent !== lastTurn.agent)
     : null;
@@ -133,9 +150,10 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
     }
   }
   function blocked(agent) {
-    if (agent === "Claude") return CLAUDE_PENDING;
     if (!agents.pins[agent])
       return `Choose the main ${agent} session under Main sessions first.`;
+    if (agent === "Claude" && !agents.claude_live)
+      return "The main Claude session is not running on the Mac mini.";
     return null;
   }
   return (
@@ -166,14 +184,21 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
             title={blocked(agent) || `Send this prompt to ${agent}`}
             onClick={() => send(agent)}
           >
-            {sending === agent
-              ? "Sending…"
-              : `Send to ${agent}${agent === "Claude" ? " (not yet)" : ""}`}
+            {sending === agent ? "Sending…" : `Send to ${agent}`}
           </button>
         ))}
-        <span className="hint">
-          Claude delivery arrives with the Board Messenger.
-        </span>
+        {agents.pins.Claude && (
+          <span className="hint">
+            Claude:{" "}
+            {agents.claude_live
+              ? `${agents.claude_live.name} · ${agents.claude_live.status || "running"}`
+              : "session not running"}{" "}
+            ·{" "}
+            {agents.messenger_listening
+              ? "messenger listening"
+              : "messenger not listening, so prompts wait"}
+          </span>
+        )}
         {edited && (
           <button
             className="text-button"
@@ -198,7 +223,14 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
               <span>
                 To {d.target} · {shortTime(d.requested_at)}
               </span>
-              <span>{dispatchState(d)}</span>
+              <span>
+                {dispatchState(d)}
+                {d.status === "queued" && !d.claimed_at && (
+                  <button className="text-button" onClick={() => cancel(d.id)}>
+                    Cancel
+                  </button>
+                )}
+              </span>
             </li>
           ))}
         </ul>

@@ -11,6 +11,7 @@ correspondence-web = "correspondence.web:main"
 correspondence-mcp = "correspondence.mcp_server:main"
 correspondence-export = "correspondence.export:main"
 correspondence-turn-hook = "correspondence.turn_hook:main"
+correspondence-dispatch = "correspondence.dispatch:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.28"]

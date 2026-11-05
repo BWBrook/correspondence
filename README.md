@@ -26,12 +26,14 @@ Open **http://127.0.0.1:8765** in Chrome on the Mac mini.
 - **Next turn** sits above a project's turns. It is prefilled with a Continue
   prompt that quotes the latest agent's closing message word for word; edit it
   to steer. **Send to Codex** queues it on the project's main Codex thread with
-  `codex queue`, which the Codex desktop app picks up. Send to Claude needs the
-  Board Messenger and is not available yet. Choose each agent's main session
-  under **Main sessions**. Each send is recorded as Queued, Delivered or
-  Failed, then Answered when that session's next turn appears in the log. A
-  second prompt to the same agent within 15 seconds is refused. Only the
-  browser can send; agents have no dispatch tool. See
+  `codex queue`, which the Codex desktop app picks up. **Send to Claude** queues
+  it for the [Board Messenger](messenger/CLAUDE.md), a Claude session on the
+  Mac mini that relays it to the project's main Claude session. Choose each
+  agent's main session under **Main sessions**. Each send is recorded as
+  Waiting for the messenger (cancellable), Delivered or Failed, then Answered
+  when that session's next turn appears in the log. A second prompt to the
+  same agent while one is waiting, or within 15 seconds of the last, is
+  refused. Only the browser can send; agents have no dispatch tool. See
   [hand-off design](docs/handoff.md).
 - Create a project with a stable ID and, optionally, its repository path.
 - Choose **Alphabetical** or **Latest activity** under **Project order** in the

@@ -119,7 +119,7 @@ def test_legacy_request_fingerprints_upgrade_once(tmp_path):
     with pytest.raises(Conflict):
         upgraded.post_message("Claude", first, "Changed", parent_id=1, request_id="old-reply")
     with upgraded.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_first_message_and_body_whitespace(board):

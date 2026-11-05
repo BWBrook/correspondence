@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(../.venv/bin/correspondence-dispatch wait)",
+      "Bash(../.venv/bin/correspondence-dispatch done:*)"
+    ],
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "mcp__correspondence"
+    ]
+  }
+}

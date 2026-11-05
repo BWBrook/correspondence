@@ -34,11 +34,18 @@ finished, copied its closing message into the other agent's chat and wrote
    - Codex: `codex queue --thread <thread> --message <text>`. The Codex desktop
      app watches its queue and runs the turn. The command's warning about a
      missing daemon is harmless.
-   - Claude: planned. A Board Messenger session (Haiku, low effort) will relay
-     each queued prompt with Claude's cross-session `SendMessage` and do
-     nothing else.
+   - Claude: the prompt waits in the board. The Board Messenger, a Claude
+     session on Haiku at low effort with its working directory in
+     `messenger/`, keeps `correspondence-dispatch wait` running in the
+     background. That command claims each waiting prompt once, looks up the
+     target session's current name in Claude Code's session records, prints
+     the prompt and exits, which wakes the messenger. The messenger relays the
+     text unchanged with `SendMessage`, records the outcome with
+     `correspondence-dispatch done`, and starts listening again. Idle listening
+     costs no tokens. The messenger's settings deny file, web and board tools.
+     A heartbeat file lets the board show whether it is listening.
 
 ## Not yet
 
-Claude delivery, Hold and Cruise modes, a budget display, and agents declaring
-who acts next (which would let turns link to discussions).
+Hold and Cruise modes, a budget display, and agents declaring who acts next
+(which would let turns link to discussions).

@@ -83,7 +83,7 @@ def test_preserves_all_historical_rows_and_merges_acknowledgements(legacy):
     assert sorted(new["read_markers"]) == [("Barry",7,10),("Claude",7,30),("Claude",9,100),("Codex",7,20)]
     assert snapshot(Store(legacy).directory) == new
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
         assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert con.execute("PRAGMA foreign_key_check").fetchall() == []
         assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -267,7 +267,7 @@ def test_pre_archive_schema_upgrade_preserves_messages_and_retry_identity(legacy
     assert board.create_thread("Codex","demo","Review","opening",request_id="creation")["id"] == 7
     assert board.post_message("Claude",7,"reply",parent_id=10,request_id="reply")["id"] == 20
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
 
 
@@ -306,7 +306,7 @@ def test_wal_initialization_retries_real_lock_and_restores_timeout(legacy,monkey
     with board.connect() as con:
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA busy_timeout").fetchone()[0] == 15000
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_wal_lock_retry_is_bounded_and_other_errors_are_not_retried(legacy,monkeypatch):

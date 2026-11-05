@@ -57,12 +57,79 @@ def test_codex_dispatch_queues_on_the_pinned_thread_and_tracks_the_answer(setup)
     assert client.get("/api/dispatches?project_id=p").json()[0]["answered_at"] == "2099-01-01T00:00:00+00:00"
 
 
-def test_dispatch_is_browser_only_and_claude_waits_for_the_messenger(setup):
+def test_dispatch_is_browser_only(setup):
     client, _ = setup
-    body = {"project_id": "p", "target": "Codex", "body": "x"}
-    assert client.post("/api/dispatches", json=body).status_code == 403
-    claude = client.post("/api/dispatches", json={**body, "target": "Claude"}, headers=HEADERS)
-    assert claude.status_code == 409 and "Messenger" in claude.json()["detail"]
+    client.post("/api/projects/p/agents", json={"agent": "Codex", "session_id": MAIN}, headers=HEADERS)
+    assert client.post("/api/dispatches", json={"project_id": "p", "target": "Codex", "body": "x"}).status_code == 403
+
+
+CLAUDE = "f4766779-d9e6-4b66-b078-9f3b4b611a97"
+
+
+@pytest.fixture
+def claude(setup, monkeypatch):
+    client, tmp_path = setup
+    sessions = tmp_path / "claude-sessions"
+    sessions.mkdir()
+    monkeypatch.setenv("CORRESPONDENCE_CLAUDE_SESSIONS", str(sessions))
+    monkeypatch.setenv("CORRESPONDENCE_DATA_DIR", str(tmp_path))
+    (sessions / "1.json").write_text(json.dumps({"pid": 999999999, "sessionId": CLAUDE, "name": "Stale name", "updatedAt": 9}))
+    (sessions / "2.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": CLAUDE, "name": "Silurian Plants",
+                                                 "status": "idle", "updatedAt": 1}))
+    client.post("/api/projects/p/agents", json={"agent": "Claude", "session_id": CLAUDE}, headers=HEADERS)
+    return client, tmp_path
+
+
+def test_claude_prompt_waits_for_the_messenger_and_is_claimed_once(claude, capsys):
+    from correspondence.dispatch import wait
+    client, tmp_path = claude
+    agents = client.get("/api/projects/p/agents").json()
+    assert agents["claude_live"] == {"name": "Silurian Plants", "status": "idle"} and agents["messenger_listening"] is False
+    sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "Line one.\nLine two."}, headers=HEADERS).json()
+    assert sent["status"] == "queued" and sent["claimed_at"] is None
+    store = Store(tmp_path)
+    wait(store, poll=0.01)
+    event = json.loads(capsys.readouterr().out)
+    assert event == {"dispatch": sent["id"], "to": "Silurian Plants", "project": "p", "message": "Line one.\nLine two."}
+    assert client.get("/api/projects/p/agents").json()["messenger_listening"] is True
+    assert store.claim_claude_dispatches() == []
+    assert client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).status_code == 409
+    store.finish_dispatch(sent["id"], True, "")
+    assert client.get("/api/dispatches?project_id=p").json()[0]["status"] == "delivered"
+
+
+def test_claude_prompt_fails_when_its_session_is_not_running(claude, capsys):
+    from correspondence.dispatch import wait
+    client, tmp_path = claude
+    (tmp_path / "claude-sessions" / "2.json").unlink()
+    first = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
+    store = Store(tmp_path)
+    with store.connect(write=True) as con:
+        con.execute("INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at) VALUES ('p','Claude','other-session-id','y','queued','2026')")
+    (tmp_path / "claude-sessions" / "3.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "other-session-id", "name": "Other"}))
+    wait(store, poll=0.01)
+    assert [json.loads(line)["to"] for line in capsys.readouterr().out.splitlines()] == ["Other"]
+    failed = [d for d in store.list_dispatches("p") if d["id"] == first["id"]][0]
+    assert failed["status"] == "failed" and "not running" in failed["detail"]
+
+
+def test_unclaimed_claude_prompt_can_be_cancelled(claude):
+    client, _ = claude
+    sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
+    assert client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).status_code == 409
+    cancelled = client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).json()
+    assert cancelled["status"] == "failed" and cancelled["detail"] == "Cancelled by Barry"
+
+
+def test_done_command_records_the_outcome_once(claude):
+    import subprocess, sys
+    client, tmp_path = claude
+    sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
+    run = lambda *a: subprocess.run([sys.executable, "-c", "from correspondence.dispatch import main; main()", "done", str(sent["id"]), *a],
+                                    capture_output=True, text=True, env={**os.environ, "CORRESPONDENCE_DATA_DIR": str(tmp_path)})
+    assert run("delivered").returncode == 0
+    second = run("failed", "late")
+    assert second.returncode != 0 and "already delivered" in second.stderr
 
 
 def test_failed_delivery_is_recorded(setup, monkeypatch):

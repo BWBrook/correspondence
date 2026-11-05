@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store
-from .dispatch import deliver_codex
+from .dispatch import claude_session, deliver_codex, messenger_listening
 from .turns import answered_at, latest_per_project, project_sessions, project_turns, read_turns
 
 
@@ -169,7 +169,10 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/projects/{project_id}/agents")
     def project_agents(project_id: str):
-        return {"pins": store().project_agents(project_id), "sessions": project_sessions(store().directory, project_id)}
+        pins = store().project_agents(project_id)
+        return {"pins": pins, "sessions": project_sessions(store().directory, project_id),
+                "claude_live": claude_session(pins["Claude"]) if "Claude" in pins else None,
+                "messenger_listening": messenger_listening(store().directory)}
 
     @app.post("/api/projects/{project_id}/agents")
     def set_project_agent(project_id: str, payload: AgentPin):
@@ -184,11 +187,15 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.post("/api/dispatches", status_code=201)
     def create_dispatch(payload: DispatchCreate):
-        if payload.target == "Claude":
-            raise Conflict("Sending to Claude needs the Board Messenger, which is not set up yet")
         dispatch = store().create_dispatch(payload.project_id, payload.target, payload.body)
+        if payload.target == "Claude":
+            return {**dispatch, "answered_at": None}
         delivered, detail = deliver_codex(dispatch["session_id"], dispatch["body"])
         return {**store().finish_dispatch(dispatch["id"], delivered, detail), "answered_at": None}
+
+    @app.post("/api/dispatches/{dispatch_id}/cancel")
+    def cancel_dispatch(dispatch_id: int, payload: Payload):
+        return {**store().cancel_dispatch(dispatch_id), "answered_at": None}
 
     @app.get("/api/{path:path}")
     def unknown_api(path: str):

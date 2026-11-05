@@ -148,6 +148,10 @@ class Store:
                     requested_at TEXT NOT NULL, delivered_at TEXT, detail TEXT)""")
                 con.execute("CREATE INDEX IF NOT EXISTS dispatches_project ON dispatches(project_id, id)")
                 con.execute("PRAGMA user_version=5")
+            if version < 6:
+                if "claimed_at" not in {row[1] for row in con.execute("PRAGMA table_info(dispatches)")}:
+                    con.execute("ALTER TABLE dispatches ADD COLUMN claimed_at TEXT")
+                con.execute("PRAGMA user_version=6")
             con.commit()
         except Exception:
             con.rollback()
@@ -419,6 +423,24 @@ class Store:
         with self.connect(write=True) as con:
             con.execute("UPDATE dispatches SET status=?, delivered_at=?, detail=? WHERE id=? AND status='queued'",
                         ("delivered" if delivered else "failed", now() if delivered else None, (detail or "")[:2000], dispatch_id))
+            return self._require(con, "dispatches", dispatch_id)
+
+    def claim_claude_dispatches(self):
+        """Hand every unclaimed queued Claude prompt to the messenger exactly once."""
+        with self.connect(write=True) as con:
+            rows = [dict(r) for r in con.execute(
+                "SELECT * FROM dispatches WHERE target='Claude' AND status='queued' AND claimed_at IS NULL ORDER BY id")]
+            stamp = now()
+            for row in rows:
+                con.execute("UPDATE dispatches SET claimed_at=? WHERE id=?", (stamp, row["id"]))
+            return rows
+
+    def cancel_dispatch(self, dispatch_id):
+        with self.connect(write=True) as con:
+            dispatch = self._require(con, "dispatches", dispatch_id)
+            if dispatch["status"] != "queued" or dispatch["claimed_at"] is not None:
+                raise Conflict("Only a prompt the messenger has not yet picked up can be cancelled")
+            con.execute("UPDATE dispatches SET status='failed', detail='Cancelled by Barry' WHERE id=?", (dispatch_id,))
             return self._require(con, "dispatches", dispatch_id)
 
     def list_dispatches(self, project_id, limit=10):
