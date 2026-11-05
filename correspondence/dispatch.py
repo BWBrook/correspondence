@@ -80,8 +80,10 @@ def messenger_listening(directory: Path) -> bool:
 
 
 def wait(store, poll: float) -> None:
-    heartbeat = store.directory / HEARTBEAT
+    heartbeat, parent = store.directory / HEARTBEAT, os.getppid()
     while True:
+        if os.getppid() != parent:
+            return  # orphaned: whoever would read our output is gone, so claim nothing
         heartbeat.touch()
         ready = []
         for dispatch in store.claim_claude_dispatches():
