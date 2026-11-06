@@ -192,7 +192,7 @@ def test_pins_on_another_machine_wait_for_its_courier(setup, monkeypatch):
 
 
 def test_a_session_gets_the_full_relay_note_only_until_one_prompt_is_delivered(claude, capsys):
-    from correspondence.dispatch import RELAY_NOTE, SHORT_NOTE, LocalBoard, serve, wait
+    from correspondence.dispatch import RELAY_NOTE, SHORT_NOTE, LocalBoard, relay_note, serve, wait
     client, tmp_path = claude
     store = Store(tmp_path)
     notes = []
@@ -205,9 +205,12 @@ def test_a_session_gets_the_full_relay_note_only_until_one_prompt_is_delivered(c
         store.finish_dispatch(event["dispatch"], True, "")
         with store.connect(write=True) as con:
             con.execute("UPDATE dispatches SET delivered_at='2026-01-01T00:00:00+00:00' WHERE status='delivered'")
-    assert notes == [RELAY_NOTE, SHORT_NOTE]
+    assert notes == [RELAY_NOTE.format(user="User"), SHORT_NOTE.format(user="User")]
     client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS)
     (tmp_path / "in.jsonl").write_text('{"op": "waiting", "target": "Claude"}\n')
     with open(tmp_path / "in.jsonl") as stdin, open(tmp_path / "out.jsonl", "w") as stdout:
         serve(LocalBoard(store), stdin, stdout)
-    assert json.loads((tmp_path / "out.jsonl").read_text())["result"][0]["primed"]
+    waiting = json.loads((tmp_path / "out.jsonl").read_text())["result"][0]
+    assert waiting["primed"] and waiting["user_name"] == "User"
+    store.set_user_name("Ada")
+    assert relay_note(LocalBoard(store).waiting("Claude")[0]) == "[From Ada through the board. Answer here, not to the messenger.]"

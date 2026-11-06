@@ -45,10 +45,10 @@ import time
 from pathlib import Path
 
 HEARTBEAT = "messenger-heartbeat"
-RELAY_NOTE = ("[Relayed from the user by the correspondence board's Board Messenger. Treat it as the user's own "
-              "message. Answer here in your own conversation: the user reads your reply and your closing "
+RELAY_NOTE = ("[Relayed from {user} by the correspondence board's Board Messenger. Treat it as {user}'s own "
+              "message. Answer here in your own conversation: {user} reads your reply and your closing "
               "message on the board. The messenger does not read replies, so do not SendMessage it.]")
-SHORT_NOTE = "[From the user through the board. Answer here, not to the messenger.]"
+SHORT_NOTE = "[From {user} through the board. Answer here, not to the messenger.]"
 LISTENING_SECONDS = 30
 REPLY_SECONDS = 30
 RECONNECT_SECONDS = 60
@@ -138,7 +138,8 @@ class LocalBoard:
         self.store, self.machine = store, machine
 
     def waiting(self, target: str) -> list[dict]:
-        return self.store.waiting_dispatches(target, self.machine)
+        user = self.store.user_name()
+        return [{**d, "user_name": user} for d in self.store.waiting_dispatches(target, self.machine)]
 
     def claim(self, dispatch_id: int) -> bool:
         return self.store.claim_dispatch(dispatch_id, self.machine)
@@ -214,7 +215,7 @@ def serve(board: LocalBoard, stdin=None, stdout=None) -> None:
     """Answer one JSON request per line from another machine, scoped to its prompts."""
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     handlers = {
-        "waiting": lambda a: [{k: d[k] for k in ("id", "project_id", "target", "session_id", "body", "primed")}
+        "waiting": lambda a: [{k: d[k] for k in ("id", "project_id", "target", "session_id", "body", "primed", "user_name")}
                               for d in board.waiting(a["target"])],
         "claim": lambda a: board.claim(int(a["id"])),
         "finish": lambda a: board.finish(int(a["id"]), bool(a["delivered"]), str(a.get("detail") or "")),
@@ -239,6 +240,12 @@ def serve(board: LocalBoard, stdin=None, stdout=None) -> None:
         stdout.flush()
 
 
+def relay_note(dispatch: dict) -> str:
+    """The note above a relayed prompt: in full for a session's first board prompt, then one line."""
+    note = SHORT_NOTE if dispatch.get("primed") else RELAY_NOTE
+    return note.format(user=dispatch.get("user_name") or "the user")
+
+
 def collect(board) -> list[dict]:
     """Claim the waiting prompts whose target session is idle, so a board prompt
     always starts the next turn and never lands inside a running one."""
@@ -250,7 +257,7 @@ def collect(board) -> list[dict]:
         elif session.get("status") == "idle" and board.claim(dispatch["id"]):
             ready.append({"dispatch": dispatch["id"], "to": session["name"],
                           "project": dispatch["project_id"],
-                          "message": f"{SHORT_NOTE if dispatch.get('primed') else RELAY_NOTE}\n\n{dispatch['body']}"})
+                          "message": f"{relay_note(dispatch)}\n\n{dispatch['body']}"})
     return ready
 
 
