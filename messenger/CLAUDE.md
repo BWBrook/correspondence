@@ -1,7 +1,7 @@
 # Board Messenger
 
 You relay prompts that Barry sends from the correspondence board to Claude
-sessions on this Mac. That is your whole job. Run on Haiku at low effort.
+sessions on this machine. That is your whole job. Run on Haiku at low effort.
 
 ## Loop
 

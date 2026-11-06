@@ -66,7 +66,7 @@ def project_sessions(directory: Path, project_id: str) -> list[dict]:
         if key not in sessions:
             sessions[key] = {"agent": turn["agent"], "session_id": turn["session_id"], "last_at": turn["recorded_at"],
                              "turns": 0, "automation": (turn["message"] or "").lstrip().startswith("<heartbeat>"),
-                             "excerpt": (turn["message"] or "")[:160]}
+                             "excerpt": (turn["message"] or "")[:160], "machine": turn.get("machine")}
         sessions[key]["turns"] += 1
     return list(sessions.values())
 

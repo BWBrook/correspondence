@@ -17,6 +17,7 @@ LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
+MACHINE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 
 
 class NotFound(ValueError):
@@ -152,6 +153,11 @@ class Store:
                 if "claimed_at" not in {row[1] for row in con.execute("PRAGMA table_info(dispatches)")}:
                     con.execute("ALTER TABLE dispatches ADD COLUMN claimed_at TEXT")
                 con.execute("PRAGMA user_version=6")
+            if version < 7:
+                for table in ("project_agents", "dispatches"):
+                    if "machine" not in {row[1] for row in con.execute(f"PRAGMA table_info({table})")}:
+                        con.execute(f"ALTER TABLE {table} ADD COLUMN machine TEXT")
+                con.execute("PRAGMA user_version=7")
             con.commit()
         except Exception:
             con.rollback()
@@ -386,19 +392,35 @@ class Store:
             pins.setdefault(row["project_id"], {})[row["agent"]] = row["session_id"]
         return pins.get(project_id, {}) if project_id is not None else pins
 
-    def set_project_agent(self, project_id, agent, session_id):
+    def pin_machines(self, project_id):
+        """Machine each main session runs on, {agent: machine}; None is the board's own host."""
+        with self.connect() as con:
+            self._project(con, project_id)
+            return {row["agent"]: row["machine"] for row in con.execute(
+                "SELECT agent, machine FROM project_agents WHERE project_id=?", (project_id,))}
+
+    def machine_pins(self, machine):
+        """Every main session pinned on one machine, for that machine's courier."""
+        with self.connect() as con:
+            return [dict(row) for row in con.execute(
+                "SELECT project_id, agent, session_id FROM project_agents WHERE machine=? ORDER BY project_id, agent", (machine,))]
+
+    def set_project_agent(self, project_id, agent, session_id, machine=None):
         if agent not in DISPATCH_TARGETS:
             raise ValueError("Agent must be Claude or Codex")
         if session_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{7,99}", session_id):
             raise ValueError("Session id must be 8–100 letters, digits or hyphens")
+        if machine is not None and not MACHINE_RE.fullmatch(machine):
+            raise ValueError("Machine must be a short lowercase name")
         with self.connect(write=True) as con:
             self._project(con, project_id)
             if session_id is None:
                 con.execute("DELETE FROM project_agents WHERE project_id=? AND agent=?", (project_id, agent))
             else:
-                con.execute("""INSERT INTO project_agents(project_id,agent,session_id,updated_at) VALUES (?,?,?,?)
-                    ON CONFLICT(project_id,agent) DO UPDATE SET session_id=excluded.session_id, updated_at=excluded.updated_at""",
-                            (project_id, agent, session_id, now()))
+                con.execute("""INSERT INTO project_agents(project_id,agent,session_id,updated_at,machine) VALUES (?,?,?,?,?)
+                    ON CONFLICT(project_id,agent) DO UPDATE SET session_id=excluded.session_id,
+                    updated_at=excluded.updated_at, machine=excluded.machine""",
+                            (project_id, agent, session_id, now(), machine))
         return self.project_agents(project_id)
 
     def create_dispatch(self, project_id, target, body):
@@ -408,33 +430,38 @@ class Store:
         body = clean_text(body, "Prompt", 50_000)
         with self.connect(write=True) as con:
             self._project(con, project_id)
-            pin = con.execute("SELECT session_id FROM project_agents WHERE project_id=? AND agent=?", (project_id, target)).fetchone()
+            pin = con.execute("SELECT session_id, machine FROM project_agents WHERE project_id=? AND agent=?", (project_id, target)).fetchone()
             if pin is None:
                 raise Conflict(f"Set this project's main {target} session first")
             cutoff = datetime.fromtimestamp(time.time() - DISPATCH_GAP_SECONDS, timezone.utc).isoformat(timespec="microseconds")
             if con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND target=?
                     AND (status='queued' OR (status='delivered' AND delivered_at>?))""", (project_id, target, cutoff)).fetchone():
                 raise Conflict(f"A prompt to {target} was just sent; wait a few seconds before sending another")
-            cursor = con.execute("INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at) VALUES (?,?,?,?,'queued',?)",
-                                 (project_id, target, pin["session_id"], body, now()))
+            cursor = con.execute("""INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at,machine)
+                VALUES (?,?,?,?,'queued',?,?)""", (project_id, target, pin["session_id"], body, now(), pin["machine"]))
             return self._require(con, "dispatches", cursor.lastrowid)
 
-    def finish_dispatch(self, dispatch_id, delivered, detail):
+    def finish_dispatch(self, dispatch_id, delivered, detail, machine=None):
         with self.connect(write=True) as con:
+            dispatch = self._require(con, "dispatches", dispatch_id)
+            if dispatch["machine"] != machine:
+                raise Conflict(f"Dispatch {dispatch_id} is not for this machine")
             con.execute("UPDATE dispatches SET status=?, delivered_at=?, detail=? WHERE id=? AND status='queued'",
                         ("delivered" if delivered else "failed", now() if delivered else None, (detail or "")[:2000], dispatch_id))
             return self._require(con, "dispatches", dispatch_id)
 
-    def waiting_claude_dispatches(self):
+    def waiting_dispatches(self, target, machine=None):
+        """Unclaimed prompts for one agent on one machine (None: the board's host)."""
         with self.connect() as con:
             return [dict(r) for r in con.execute(
-                "SELECT * FROM dispatches WHERE target='Claude' AND status='queued' AND claimed_at IS NULL ORDER BY id")]
+                """SELECT * FROM dispatches WHERE target=? AND machine IS ? AND status='queued' AND claimed_at IS NULL
+                ORDER BY id""", (target, machine))]
 
-    def claim_dispatch(self, dispatch_id):
-        """Hand one waiting prompt to the messenger; False if someone else already took it."""
+    def claim_dispatch(self, dispatch_id, machine=None):
+        """Hand one waiting prompt to the machine's messenger or courier; False if already taken."""
         with self.connect(write=True) as con:
-            return con.execute("UPDATE dispatches SET claimed_at=? WHERE id=? AND status='queued' AND claimed_at IS NULL",
-                               (now(), dispatch_id)).rowcount == 1
+            return con.execute("""UPDATE dispatches SET claimed_at=? WHERE id=? AND machine IS ? AND status='queued'
+                AND claimed_at IS NULL""", (now(), dispatch_id, machine)).rowcount == 1
 
     def cancel_dispatch(self, dispatch_id):
         with self.connect(write=True) as con:

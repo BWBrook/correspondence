@@ -28,15 +28,12 @@ finished, copied its closing message into the other agent's chat and wrote
    success, so turns recorded while the board's host is unreachable arrive
    with the next one. The board ignores exact duplicate lines.
 
-   The Codex Windows app runs no hooks, even approved ones. For threads in
-   that app, `correspondence-codex-watch --thread <project>=<thread>` runs as
-   a user service instead. It follows each thread's rollout file in
-   `$CODEX_HOME/sessions/` and turns every `task_complete` event into the
-   record the hook would have written, with the model taken from the turn's
-   `turn_context`. Its records go through the same spool and `--forward`
-   command. A thread seen for the first time starts at the end of its file;
-   read positions are kept in `codex-watch.json` beside the spool. Failed sends
-   are retried once a minute.
+   The Codex Windows app runs no hooks, even approved ones, so on such a
+   machine the courier (see 6) records Codex turns from each pinned thread's
+   rollout file in `$CODEX_HOME/sessions/`. Every `task_complete` event becomes
+   the record the hook would have written, with the model taken from the
+   turn's `turn_context`, and goes through the same spool and `--forward`
+   command. A thread seen for the first time starts at the end of its file.
 2. **Turns panel.** When no discussion is open, the reading pane shows the
    latest turn per project, or a project's recent turns.
 3. **Main sessions.** Each project pins one Claude session and one Codex thread.
@@ -65,6 +62,27 @@ finished, copied its closing message into the other agent's chat and wrote
      `correspondence-dispatch done`, and starts listening again. Idle listening
      costs no tokens. The messenger's settings deny file, web and board tools.
      A heartbeat file lets the board show whether it is listening.
+
+6. **Other machines.** A pin records the machine its session's turns came
+   from (none for the board's own host). Prompts to a session on another
+   machine, Codex ones included, wait in the board until that machine collects
+   them. The board's host cannot reach such a machine (the `wsl` laptop only
+   connects out), so the machine reaches the board instead, through
+   `correspondence-dispatch serve --machine <name>` run over SSH. That command
+   answers one JSON request per line, sees only that machine's pins and
+   prompts, and exits after ten idle minutes.
+   - **Courier.** `correspondence-courier --machine <name> --board "<ssh … serve>"
+     --forward "<ssh … --append>"` runs as a user service on that machine. Every
+     few seconds it reads the machine's pins and reports whether each pinned
+     Claude session is running and idle, which also tells the board the
+     courier is online. It queues waiting Codex prompts with the local
+     `codex queue` and records Codex turns as above. On `wsl` it must write to
+     the Codex app's queue database (`CODEX_SQLITE_HOME=~/.codex/sqlite`).
+   - **Messenger.** The machine runs its own Board Messenger with the same
+     `wait` and `done` commands; `CORRESPONDENCE_BOARD`, set to the SSH command
+     for `serve` in the messenger's `.claude/settings.local.json`, points them
+     at the remote board. A board connection that fails is retried every
+     minute without waking the messenger.
 
 ## Not yet
 

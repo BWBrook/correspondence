@@ -81,27 +81,27 @@ def claude(setup, monkeypatch):
 
 
 def test_claude_prompt_waits_for_the_messenger_and_is_claimed_once(claude, capsys):
-    from correspondence.dispatch import wait
+    from correspondence.dispatch import LocalBoard, wait
     client, tmp_path = claude
     agents = client.get("/api/projects/p/agents").json()
     assert agents["claude_live"] == {"name": "Silurian Plants", "status": "idle"} and agents["messenger_listening"] is False
     sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "Line one.\nLine two."}, headers=HEADERS).json()
     assert sent["status"] == "queued" and sent["claimed_at"] is None
     store = Store(tmp_path)
-    wait(store, poll=0.01)
+    wait(LocalBoard(store), poll=0.01)
     event = json.loads(capsys.readouterr().out)
     assert {k: event[k] for k in ("dispatch", "to", "project")} == {"dispatch": sent["id"], "to": "Silurian Plants", "project": "p"}
     note, body = event["message"].split("\n\n", 1)
     assert body == "Line one.\nLine two." and "do not SendMessage" in note
     assert client.get("/api/projects/p/agents").json()["messenger_listening"] is True
-    assert store.waiting_claude_dispatches() == [] and store.claim_dispatch(sent["id"]) is False
+    assert store.waiting_dispatches("Claude") == [] and store.claim_dispatch(sent["id"]) is False
     assert client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).status_code == 409
     store.finish_dispatch(sent["id"], True, "")
     assert client.get("/api/dispatches?project_id=p").json()[0]["status"] == "delivered"
 
 
 def test_claude_prompt_fails_when_its_session_is_not_running(claude, capsys):
-    from correspondence.dispatch import wait
+    from correspondence.dispatch import LocalBoard, wait
     client, tmp_path = claude
     (tmp_path / "claude-sessions" / "2.json").unlink()
     first = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
@@ -109,7 +109,7 @@ def test_claude_prompt_fails_when_its_session_is_not_running(claude, capsys):
     with store.connect(write=True) as con:
         con.execute("INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at) VALUES ('p','Claude','other-session-id','y','queued','2026')")
     (tmp_path / "claude-sessions" / "3.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "other-session-id", "name": "Other", "status": "idle"}))
-    wait(store, poll=0.01)
+    wait(LocalBoard(store), poll=0.01)
     assert [json.loads(line)["to"] for line in capsys.readouterr().out.splitlines()] == ["Other"]
     failed = [d for d in store.list_dispatches("p") if d["id"] == first["id"]][0]
     assert failed["status"] == "failed" and "not running" in failed["detail"]
@@ -156,12 +156,36 @@ def test_archive_carries_pins_and_dispatches(tmp_path):
 
 
 def test_claude_prompt_waits_while_its_session_is_busy(claude):
-    from correspondence.dispatch import collect
+    from correspondence.dispatch import LocalBoard, collect
     client, tmp_path = claude
     record = tmp_path / "claude-sessions" / "2.json"
     record.write_text(record.read_text().replace('"idle"', '"busy"'))
     sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
     store = Store(tmp_path)
-    assert collect(store) == [] and store.waiting_claude_dispatches()[0]["id"] == sent["id"]
+    assert collect(LocalBoard(store)) == [] and store.waiting_dispatches("Claude")[0]["id"] == sent["id"]
     record.write_text(record.read_text().replace('"busy"', '"idle"'))
-    assert [e["dispatch"] for e in collect(store)] == [sent["id"]] and collect(store) == []
+    assert [e["dispatch"] for e in collect(LocalBoard(store))] == [sent["id"]] and collect(LocalBoard(store)) == []
+
+
+def test_pins_on_another_machine_wait_for_its_courier(setup, monkeypatch):
+    from correspondence.dispatch import LocalBoard
+    client, tmp_path = setup
+    remote_codex, remote_claude = "01a0fb34-wsl-thread", "2114b555-wsl-session"
+    with open(tmp_path / "turns.jsonl", "a") as ledger:
+        for agent, session in (("Codex", remote_codex), ("Claude", remote_claude)):
+            ledger.write(json.dumps({"recorded_at": "2026-11-06T03:50:42+00:00", "agent": agent, "project": "p",
+                                     "session_id": session, "message": "On wsl.", "machine": "wsl"}) + "\n")
+    for agent, session in (("Codex", remote_codex), ("Claude", remote_claude)):
+        client.post("/api/projects/p/agents", json={"agent": agent, "session_id": session}, headers=HEADERS)
+    agents = client.get("/api/projects/p/agents").json()
+    assert agents["machines"] == {"Codex": "wsl", "Claude": "wsl"} and agents["couriers"] == {"wsl": False}
+    assert agents["claude_live"] is None and agents["messenger_listening"] is False
+    sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Codex", "body": "Over to wsl."}, headers=HEADERS)
+    assert sent.json()["status"] == "queued" and sent.json()["machine"] == "wsl"
+    assert not (tmp_path / "codex-args").exists()
+    board = LocalBoard(Store(tmp_path), "wsl")
+    board.report_sessions({remote_claude: {"name": "Extinction Vortex", "status": "idle"}})
+    board.heartbeat()
+    agents = client.get("/api/projects/p/agents").json()
+    assert agents["couriers"] == {"wsl": True} and agents["messenger_listening"] is True
+    assert agents["claude_live"] == {"name": "Extinction Vortex", "status": "idle"}

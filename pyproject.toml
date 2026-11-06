@@ -12,7 +12,7 @@ correspondence-mcp = "correspondence.mcp_server:main"
 correspondence-export = "correspondence.export:main"
 correspondence-turn-hook = "correspondence.turn_hook:main"
 correspondence-dispatch = "correspondence.dispatch:main"
-correspondence-codex-watch = "correspondence.codex_watch:main"
+correspondence-courier = "correspondence.courier:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.28"]

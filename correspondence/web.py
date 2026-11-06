@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store
-from .dispatch import claude_session, deliver_codex, messenger_listening
+from .dispatch import claude_session, courier_online, deliver_codex, messenger_listening, remote_claude_session
 from .turns import answered_at, latest_per_project, project_sessions, project_turns, read_turns
 
 
@@ -169,14 +169,24 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/projects/{project_id}/agents")
     def project_agents(project_id: str):
-        pins = store().project_agents(project_id)
-        return {"pins": pins, "sessions": project_sessions(store().directory, project_id),
-                "claude_live": claude_session(pins["Claude"]) if "Claude" in pins else None,
-                "messenger_listening": messenger_listening(store().directory)}
+        directory = store().directory
+        pins, machines = store().project_agents(project_id), store().pin_machines(project_id)
+        claude_machine = machines.get("Claude")
+        if "Claude" not in pins:
+            live = None
+        elif claude_machine is None:
+            live = claude_session(pins["Claude"])
+        else:
+            live = remote_claude_session(directory, claude_machine, pins["Claude"])
+        return {"pins": pins, "machines": machines, "sessions": project_sessions(directory, project_id),
+                "claude_live": live, "messenger_listening": messenger_listening(directory, claude_machine),
+                "couriers": {m: courier_online(directory, m) for m in set(machines.values()) if m}}
 
     @app.post("/api/projects/{project_id}/agents")
     def set_project_agent(project_id: str, payload: AgentPin):
-        store().set_project_agent(project_id, payload.agent, payload.session_id)
+        machine = next((s["machine"] for s in project_sessions(store().directory, project_id)
+                        if s["agent"] == payload.agent and s["session_id"] == payload.session_id), None)
+        store().set_project_agent(project_id, payload.agent, payload.session_id, machine)
         return project_agents(project_id)
 
     @app.get("/api/dispatches")
@@ -188,7 +198,7 @@ def create_app(data_dir=None, dist_dir=None):
     @app.post("/api/dispatches", status_code=201)
     def create_dispatch(payload: DispatchCreate):
         dispatch = store().create_dispatch(payload.project_id, payload.target, payload.body)
-        if payload.target == "Claude":
+        if payload.target == "Claude" or dispatch["machine"] is not None:
             return {**dispatch, "answered_at": None}
         delivered, detail = deliver_codex(dispatch["session_id"], dispatch["body"])
         return {**store().finish_dispatch(dispatch["id"], delivered, detail), "answered_at": None}

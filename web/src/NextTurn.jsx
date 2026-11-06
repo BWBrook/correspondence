@@ -19,13 +19,19 @@ Take your next turn.`;
 }
 
 function dispatchState(d, live) {
+  const carrier = d.target === "Codex" ? "courier" : "messenger";
+  const where = d.machine ? `the ${d.machine} ${carrier}` : `the ${carrier}`;
   if (d.status === "failed") return `Failed: ${d.detail || "no detail"}`;
   if (d.answered_at) return `Answered ${shortTime(d.answered_at)}`;
   if (d.status === "delivered") return "Delivered, waiting for a reply";
-  if (d.claimed_at) return "Handed to the messenger";
+  if (d.claimed_at) return `Handed to ${where}`;
   if (d.target === "Claude" && live && live.status !== "idle")
     return `Waiting for ${live.name} to finish its turn`;
-  return "Waiting for the messenger";
+  return `Waiting for ${where}`;
+}
+
+function machineName(machine) {
+  return machine || "the Mac mini";
 }
 
 function MainSessions({ projectId, agents, onChange }) {
@@ -65,7 +71,8 @@ function MainSessions({ projectId, agents, onChange }) {
                   {s.session_id.slice(0, 8)} · {s.turns}{" "}
                   {s.turns === 1 ? "turn" : "turns"} · last{" "}
                   {shortTime(s.last_at)}
-                  {s.automation ? " · automation" : ""} ·{" "}
+                  {s.automation ? " · automation" : ""}
+                  {s.machine ? ` · ${s.machine}` : ""} ·{" "}
                   {s.excerpt.replace(/\s+/g, " ").slice(0, 50)}
                 </option>
               ))}
@@ -82,7 +89,12 @@ function MainSessions({ projectId, agents, onChange }) {
 }
 
 export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
-  const [agents, setAgents] = useState({ pins: {}, sessions: [] });
+  const [agents, setAgents] = useState({
+    pins: {},
+    machines: {},
+    couriers: {},
+    sessions: [],
+  });
   const [dispatches, setDispatches] = useState([]);
   const [text, setText] = useState("");
   const [edited, setEdited] = useState(false);
@@ -155,8 +167,11 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
   function blocked(agent) {
     if (!agents.pins[agent])
       return `Choose the main ${agent} session under Main sessions first.`;
+    const machine = agents.machines[agent];
+    if (agent === "Claude" && machine && !agents.couriers[machine])
+      return `${machine} is offline or its courier is not running.`;
     if (agent === "Claude" && !agents.claude_live)
-      return "The main Claude session is not running on the Mac mini.";
+      return `The main Claude session is not running on ${machineName(machine)}.`;
     return null;
   }
   return (
@@ -192,7 +207,7 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
         ))}
         {agents.pins.Claude && (
           <span className="hint">
-            Claude:{" "}
+            Claude{agents.machines.Claude ? ` on ${agents.machines.Claude}` : ""}:{" "}
             {agents.claude_live
               ? `${agents.claude_live.name} · ${agents.claude_live.status || "running"}`
               : "session not running"}{" "}
@@ -200,6 +215,14 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
             {agents.messenger_listening
               ? "messenger listening"
               : "messenger not listening, so prompts wait"}
+          </span>
+        )}
+        {agents.pins.Codex && agents.machines.Codex && (
+          <span className="hint">
+            Codex on {agents.machines.Codex}:{" "}
+            {agents.couriers[agents.machines.Codex]
+              ? "courier online"
+              : "courier offline, so prompts wait"}
           </span>
         )}
         {edited && (
