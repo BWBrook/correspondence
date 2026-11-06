@@ -50,7 +50,7 @@ def world(tmp_path):
                                "--board", board_cmd, "--forward", forward], text=True, capture_output=True, env=env)
 
     return {"store": store, "board": board, "local": local, "rollout": rollout, "sessions": sessions, "run": run,
-            "serve": serve_cmd, "tmp": tmp_path}
+            "serve": serve_cmd, "tmp": tmp_path, "env": env}
 
 
 def ledger(directory):
@@ -168,3 +168,16 @@ def test_remote_messenger_relays_a_claude_prompt(world, capsys, monkeypatch):
         board.close()
     assert (world["board"] / "messenger-heartbeat-wsl").exists()
     assert not (world["board"] / "messenger-heartbeat").exists()
+
+
+def test_announce_sends_a_new_threads_latest_turn_so_it_can_be_pinned(world):
+    world["store"].set_project_agent("project", "Codex", None)
+    with open(world["rollout"], "a") as handle:
+        handle.write(turn("latest", "The newest closing message."))
+    result = subprocess.run([sys.executable, "-m", "correspondence.courier", "--once", "--machine", "wsl",
+                             "--board", world["serve"], "--forward",
+                             f"env CORRESPONDENCE_DATA_DIR={world['board']} {sys.executable} -m correspondence.turn_hook --append",
+                             "--announce", f"project={THREAD}"],
+                            text=True, capture_output=True, env=world["env"])
+    assert "announced" in result.stderr
+    assert [(e["turn_id"], e["machine"]) for e in ledger(world["board"])] == [("latest", "wsl")]

@@ -148,6 +148,19 @@ def watch(home: Path, directory: Path, threads: dict[str, str], machine: str, st
     return records
 
 
+def announce(home: Path, directory: Path, thread: str, project: str, machine: str) -> dict | None:
+    """Spool a thread's latest completed turn once, so the board lists it for pinning."""
+    path = rollout_path(home, thread)
+    if path is None:
+        return None
+    turns, _ = scan(path, 0, {})
+    if not turns:
+        return None
+    entry = turn_record(turns[-1], thread, project, machine)
+    append(entry, directory, "turns-spool.jsonl")
+    return entry
+
+
 def exchange(board, log) -> dict[str, str]:
     """Report pinned Claude sessions and deliver waiting Codex prompts; return the pinned Codex threads."""
     pins = board.pins()
@@ -168,11 +181,20 @@ def main() -> None:
     parser.add_argument("--forward", required=True, help="command that receives spooled turn lines on stdin")
     parser.add_argument("--interval", type=float, default=5.0, help="seconds between rounds")
     parser.add_argument("--once", action="store_true", help="run one round and exit")
+    parser.add_argument("--announce", action="append", default=[], metavar="PROJECT=THREAD",
+                        help="send this Codex thread's latest turn once, so it can be pinned; repeatable")
     args = parser.parse_args()
     home, directory, board = codex_home(), data_dir(), RemoteBoard(args.board)
 
     def log(text: str) -> None:
         print(text, file=sys.stderr, flush=True)
+
+    for value in args.announce:
+        project, _, thread = value.partition("=")
+        if not (project and thread):
+            parser.error(f"--announce needs PROJECT=THREAD, got {value!r}")
+        entry = announce(home, directory, thread, project, args.machine)
+        log(f"announced {thread} in {project}: {entry['recorded_at']}" if entry else f"no completed turn found for {thread}")
 
     state = load_state(directory)
     threads = {thread: entry["project"] for thread, entry in state.items() if entry.get("project")}

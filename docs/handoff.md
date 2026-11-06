@@ -78,6 +78,9 @@ finished, copied its closing message into the other agent's chat and wrote
      courier is online. It queues waiting Codex prompts with the local
      `codex queue` and records Codex turns as above. On `wsl` it must write to
      the Codex app's queue database (`CODEX_SQLITE_HOME=~/.codex/sqlite`).
+     A Codex thread appears on the board only once it has a recorded turn, so
+     a new one is introduced with `--announce <project>=<thread>`, which sends
+     its latest completed turn once and makes it available to pin.
    - **Messenger.** The machine runs its own Board Messenger with the same
      `wait` and `done` commands; `CORRESPONDENCE_BOARD`, set to the SSH command
      for `serve` in the messenger's `.claude/settings.local.json`, points them
