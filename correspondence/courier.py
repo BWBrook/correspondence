@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -42,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from correspondence.dispatch import RECONNECT_SECONDS, RemoteBoard, claude_session, deliver_codex
-from correspondence.turn_hook import append, data_dir, flush
+from correspondence.turn_hook import append, closing_from_transcript, data_dir, flush
 
 STATE = "courier.json"
 
@@ -52,8 +53,23 @@ def codex_home() -> Path:
 
 
 def rollout_path(home: Path, thread: str) -> Path | None:
+    """The thread's rollout file; Codex compresses older ones to ``.jsonl.zst``."""
     found = sorted((home / "sessions").glob(f"*/*/*/rollout-*-{thread}.jsonl"))
+    found = found or sorted((home / "sessions").glob(f"*/*/*/rollout-*-{thread}.jsonl.zst"))
     return found[-1] if found else None
+
+
+def read_rollout(path: Path, offset: int) -> bytes:
+    if path.suffix != ".zst":
+        with open(path, "rb") as handle:
+            handle.seek(offset)
+            return handle.read()
+    try:
+        from compression import zstd
+        data = zstd.decompress(path.read_bytes())
+    except ImportError:
+        data = subprocess.run(["zstd", "-dc", str(path)], capture_output=True, check=True).stdout
+    return data[offset:]
 
 
 def iso_seconds(timestamp: str) -> str:
@@ -67,9 +83,7 @@ def scan(path: Path, offset: int, context: dict) -> tuple[list[dict], int]:
     Only whole lines are consumed. ``context`` carries the model and working
     directory of the latest ``turn_context`` across calls.
     """
-    with open(path, "rb") as handle:
-        handle.seek(offset)
-        chunk = handle.read()
+    chunk = read_rollout(path, offset)
     end = chunk.rfind(b"\n") + 1
     completed = []
     for raw in chunk[:end].splitlines():
@@ -121,8 +135,12 @@ def save_state(directory: Path, state: dict) -> None:
 def watch(home: Path, directory: Path, threads: dict[str, str], machine: str, state: dict) -> list[dict]:
     """Spool each pinned thread's newly completed turns and return their records.
 
-    ``state`` maps thread to read position; threads no longer pinned are
-    dropped, so pinning one again starts at the end of its file.
+    ``state`` maps thread to read position, file size and time, and the last
+    turn's time. A file that is unchanged is not read again. When a thread's
+    file changes name, as when Codex compresses or restores it, the new file is
+    read in full and only turns completed after the last one seen are sent. Threads no
+    longer pinned are dropped, so pinning one again starts at the end of its
+    file.
     """
     for thread in set(state) - set(threads):
         del state[thread]
@@ -132,32 +150,50 @@ def watch(home: Path, directory: Path, threads: dict[str, str], machine: str, st
         path = Path(known["path"]) if known and Path(known["path"]).exists() else rollout_path(home, thread)
         if path is None:
             continue
-        size = path.stat().st_size
-        if known is None or known.get("path") != str(path) or known.get("offset", 0) > size:
-            context: dict = {}
-            _, offset = scan(path, 0, context)
-            state[thread] = {"path": str(path), "offset": offset, "project": project, **context}
+        stat = path.stat()
+        same_file = bool(known) and known.get("path") == str(path)
+        if same_file and known.get("mtime") == stat.st_mtime and known.get("size") == stat.st_size:
             continue
-        context = {key: known.get(key) for key in ("model", "cwd")}
-        turns, offset = scan(path, known["offset"], context)
-        for turn in turns:
+        if same_file and path.suffix != ".zst" and known.get("offset", 0) <= stat.st_size:
+            context = {key: known.get(key) for key in ("model", "cwd")}
+            new, offset = scan(path, known["offset"], context)
+            last = new[-1]["timestamp"] if new else known.get("last_at")
+        else:
+            context = {}
+            turns, offset = scan(path, 0, context)
+            if not known or "last_at" not in known:
+                new = []
+            else:
+                new = [turn for turn in turns if (turn["timestamp"] or "") > (known["last_at"] or "")]
+            last = turns[-1]["timestamp"] if turns else (known or {}).get("last_at")
+        for turn in new:
             entry = turn_record(turn, thread, project, machine)
             append(entry, directory, "turns-spool.jsonl")
             records.append(entry)
-        state[thread] = {"path": str(path), "offset": offset, "project": project, **context}
+        state[thread] = {"path": str(path), "offset": offset, "size": stat.st_size, "mtime": stat.st_mtime,
+                         "project": project, "last_at": last, **context}
     return records
 
 
-def announce(home: Path, directory: Path, thread: str, project: str, machine: str) -> dict | None:
-    """Spool a thread's latest completed turn once, so the board lists it for pinning."""
-    path = rollout_path(home, thread)
-    if path is None:
-        return None
-    turns, _ = scan(path, 0, {})
-    if not turns:
-        return None
-    entry = turn_record(turns[-1], thread, project, machine)
-    append(entry, directory, "turns-spool.jsonl")
+def announce(home: Path, directory: Path, session: str, project: str, machine: str) -> dict | None:
+    """Spool a Codex thread's or Claude session's latest turn once, so the board lists it for pinning."""
+    path = rollout_path(home, session)
+    if path is not None:
+        turns, _ = scan(path, 0, {})
+        entry = turn_record(turns[-1], session, project, machine) if turns else None
+    else:
+        transcripts = sorted((Path.home() / ".claude" / "projects").glob(f"*/{session}.jsonl"))
+        if not transcripts:
+            return None
+        message, model = closing_from_transcript(str(transcripts[-1]))
+        if message is None:
+            return None
+        recorded = datetime.fromtimestamp(transcripts[-1].stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+        entry = {"recorded_at": recorded, "agent": "Claude", "project": project, "session_id": session,
+                 "turn_id": None, "cwd": None, "model": model, "event": "announce", "message": message,
+                 "machine": machine}
+    if entry:
+        append(entry, directory, "turns-spool.jsonl")
     return entry
 
 
@@ -182,7 +218,7 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=5.0, help="seconds between rounds")
     parser.add_argument("--once", action="store_true", help="run one round and exit")
     parser.add_argument("--announce", action="append", default=[], metavar="PROJECT=THREAD",
-                        help="send this Codex thread's latest turn once, so it can be pinned; repeatable")
+                        help="send this Codex thread's or Claude session's latest turn once, so it can be pinned; repeatable")
     args = parser.parse_args()
     home, directory, board = codex_home(), data_dir(), RemoteBoard(args.board)
 

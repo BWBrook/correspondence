@@ -181,3 +181,34 @@ def test_announce_sends_a_new_threads_latest_turn_so_it_can_be_pinned(world):
                             text=True, capture_output=True, env=world["env"])
     assert "announced" in result.stderr
     assert [(e["turn_id"], e["machine"]) for e in ledger(world["board"])] == [("latest", "wsl")]
+
+
+def test_compressed_threads_are_read_and_a_restored_file_sends_only_new_turns(world, tmp_path):
+    from compression import zstd
+    rollout, home = world["rollout"], tmp_path / "codex"
+    packed = rollout.with_name(rollout.name + ".zst")
+    packed.write_bytes(zstd.compress(rollout.read_bytes()))
+    old_text = rollout.read_text()
+    rollout.unlink()
+    state, threads = {}, {THREAD: "project"}
+    assert courier.watch(home, tmp_path / "spool", threads, "wsl", state) == []
+    assert state[THREAD]["path"].endswith(".zst") and state[THREAD]["model"] == "gpt-6-astra"
+    assert courier.watch(home, tmp_path / "spool", threads, "wsl", state) == []
+    rollout.write_text(old_text + turn("resumed", "Back from the archive.", timestamp="2026-11-07T00:00:00Z"))
+    packed.unlink()
+    assert [e["turn_id"] for e in courier.watch(home, tmp_path / "spool", threads, "wsl", state)] == ["resumed"]
+    rollout.unlink()
+    rollout.with_name("rollout-2026-11-08T00-00-00-" + THREAD + ".jsonl").write_text(
+        turn("fresh", "A new file with only new turns.", timestamp="2026-11-08T00:00:00Z"))
+    assert [e["turn_id"] for e in courier.watch(home, tmp_path / "spool", threads, "wsl", state)] == ["fresh"]
+
+
+def test_announce_introduces_a_claude_session(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    transcript = tmp_path / ".claude/projects/-Users-b-games-x" / f"{CLAUDE}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5",
+                          "content": [{"type": "text", "text": "Ready when you are."}]}}) + "\n")
+    entry = courier.announce(tmp_path / "codex", tmp_path / "spool", CLAUDE, "project", "macbook")
+    assert (entry["agent"], entry["model"], entry["message"], entry["machine"]) == ("Claude", "claude-opus-5-5", "Ready when you are.", "macbook")
+    assert courier.announce(tmp_path / "codex", tmp_path / "spool", "no-such-session-id", "project", "macbook") is None
