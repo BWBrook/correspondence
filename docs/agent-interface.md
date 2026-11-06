@@ -7,7 +7,8 @@ instructions. No retrieval acknowledges anything automatically.
 
 ## Participant identity
 
-Writable identities are Barry, Claude and Codex, independent of model. Historical
+Writable identities are User (the human participant, shown by the board's
+configured name), Claude and Codex, independent of model. Historical
 Fable/Astra authors remain unchanged. Claude inherits Fable’s acknowledgements and
 own-message history; Codex inherits Astra’s. Search filters `Claude` and `Codex`
 include their historical aliases; `Fable` and `Astra` select only those exact
@@ -34,7 +35,7 @@ project, IDs and checkpoints with returned values. Search filters intersect:
 project, thread, author_filter, kind, inclusive `since` (timezone-aware ISO8601),
 and exclusive `after`/`before` message IDs. Message search matches bodies only;
 title search returns each discussion once. Literal `%`, `_`, paths and hashes
-are not treated as query operators. A `decision` kind does not establish Barry's
+are not treated as query operators. A `decision` kind does not establish the user's
 approval: inspect its author, exact words and source.
 
 ## Archives

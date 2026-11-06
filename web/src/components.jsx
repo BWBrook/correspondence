@@ -8,6 +8,8 @@ import {
   stamp,
   post,
   authorLabel,
+  getUserName,
+  USER,
   participantName,
 } from "./api";
 
@@ -216,7 +218,7 @@ export function Message({
       <div
         className={`avatar ${participantName(message.author).toLowerCase()}`}
       >
-        {message.author[0]}
+        {authorLabel(message.author)[0]}
       </div>
       <div className="message-content">
         <header className="message-heading">
@@ -272,7 +274,7 @@ export function Message({
 
 export function UnreadCounts({ counts }) {
   const waiting = Object.entries(counts || {}).filter(
-    ([name, count]) => name !== "Barry" && count > 0,
+    ([name, count]) => name !== USER && count > 0,
   );
   if (!waiting.length) return null;
   return (
@@ -387,7 +389,7 @@ export function Composer({
       )}
       <footer>
         <span>
-          Posting as <strong>Barry</strong> · Markdown supported
+          Posting as <strong>{getUserName()}</strong> · Markdown supported
         </span>
         <button disabled={busy || !body.trim()}>
           {busy ? "Posting…" : "Post reply"}

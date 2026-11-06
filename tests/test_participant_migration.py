@@ -74,16 +74,23 @@ def snapshot(directory):
                 for table in ("projects","threads","messages","read_markers","requests")}
 
 
+def as_user(rows):
+    """Rows as version 8 stores them: the human participant becomes the token User."""
+    return [tuple("User" if value == "Barry" else value for value in row) for row in rows]
+
+
 def test_preserves_all_historical_rows_and_merges_acknowledgements(legacy):
     old = snapshot(legacy)
     board = Store(legacy)
     new = snapshot(legacy)
-    for table in ("projects","threads","messages","requests"):
+    for table in ("projects","threads","requests"):
         assert new[table] == old[table]
-    assert sorted(new["read_markers"]) == [("Barry",7,10),("Claude",7,30),("Claude",9,100),("Codex",7,20)]
+    assert new["messages"] == as_user(old["messages"])
+    assert board.user_name() == "Barry"
+    assert sorted(new["read_markers"]) == [("Claude",7,30),("Claude",9,100),("Codex",7,20),("User",7,10)]
     assert snapshot(Store(legacy).directory) == new
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
         assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert con.execute("PRAGMA foreign_key_check").fetchall() == []
         assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -96,13 +103,13 @@ def test_preserves_all_historical_rows_and_merges_acknowledgements(legacy):
     assert "Fable" in board.export_thread("Codex",7) and "GPT-6 Astra" in board.export_thread("Claude",7)
 
 
-@pytest.mark.parametrize("participant,own", [("Barry",{"Barry"}),("Claude",{"Claude","Fable"}),("Codex",{"Codex","Astra"})])
+@pytest.mark.parametrize("participant,own", [("User",{"User"}),("Claude",{"Claude","Fable"}),("Codex",{"Codex","Astra"})])
 def test_alias_own_post_rules_on_all_count_and_unread_surfaces(legacy, participant, own):
     board = Store(legacy)
     board.post_message("Claude",7,"Current Claude")
     board.post_message("Codex",7,"Current Codex")
     all_messages = board.inbox(participant)["items"]
-    marker_map = {7:{"Barry":10,"Claude":30,"Codex":20}[participant],8:0}
+    marker_map = {7:{"User":10,"Claude":30,"Codex":20}[participant],8:0}
     unread = [m for m in all_messages if m["id"] > marker_map[m["thread_id"]] and m["author"] not in own]
     expected_ids = [m["id"] for m in unread]
     expected_threads = {m["thread_id"] for m in unread}
@@ -111,7 +118,7 @@ def test_alias_own_post_rules_on_all_count_and_unread_surfaces(legacy, participa
     assert {t["id"] for t in board.list_threads_page(participant,unread_only=True)["items"]} == expected_threads
     assert board.list_projects(participant)[0]["unread_count"] == len(unread)
     for t in board.search_threads(participant,"Review")["items"] + board.list_threads(participant):
-        assert set(t["read_markers"]) == set(t["unread_counts"]) == {"Barry","Claude","Codex"}
+        assert set(t["read_markers"]) == set(t["unread_counts"]) == {"User","Claude","Codex"}
         assert t["unread_count"] == sum(m["thread_id"] == t["id"] for m in unread)
     metadata = board.get_message(participant,10)["thread"]
     expected_first = next((m["id"] for m in unread if m["thread_id"] == 7),None)
@@ -128,7 +135,7 @@ def test_current_author_filters_include_aliases_historical_filters_are_exact(leg
     claude = board.post_message("Claude",7,"reply")
     codex = board.post_message("Codex",7,"reply")
     for name,expected in [("Claude",[claude["id"],20]),("Fable",[20]),("Codex",[codex["id"]]),("Astra",[])]:
-        result = board.search_messages_page("Barry","reply",author_filter=name)
+        result = board.search_messages_page("User","reply",author_filter=name)
         assert [m["id"] for m in result["items"]] == expected
     assert not board.search_messages_page("Claude","reply",author_filter="Fable",after=20)["items"]
     assert board.search_messages_page("Claude","archived",author_filter="Claude",archived=True)["items"][0]["author"] == "Fable"
@@ -149,7 +156,7 @@ def test_permanent_alias_request_keys_return_original_and_conflict(legacy):
         con.execute("INSERT INTO requests VALUES (?,?,?,?,?)", ("Claude","reply","post_message",Store._fingerprint([7,"reply","note",10]),new["id"]))
     with pytest.raises(Conflict,match="conflicting"):
         board.post_message("Claude",7,"reply",parent_id=10,request_id="reply")
-    archived = board.archive_project("demo",board.list_projects("Barry")[0]["state_token"])
+    archived = board.archive_project("demo",board.list_projects("User")[0]["state_token"])
     from correspondence.store import NotFound
     with pytest.raises(NotFound):
         board.create_thread("Codex","demo","Review","opening",request_id="creation")
@@ -214,8 +221,9 @@ def test_simultaneous_migration_is_single_atomic_change(legacy):
     with ThreadPoolExecutor(max_workers=6) as pool:
         stores = list(pool.map(initialize,range(6)))
     after = snapshot(legacy)
-    for table in ("messages","threads","projects","requests"):
+    for table in ("threads","projects","requests"):
         assert after[table] == before[table]
+    assert after["messages"] == as_user(before["messages"])
     assert all(store.read_thread("Claude",7)["thread"]["last_read_message_id"] == 30 for store in stores)
 
 
@@ -226,7 +234,7 @@ def test_current_http_posts_and_real_mcp_alias_retry(legacy):
         assert historical["message"]["author"] == "Fable"
         assert historical["thread"]["read_markers"]["Claude"] == 30
         result=client.post("/api/threads/7/messages",json={"body":"Browser message"},headers=headers)
-        assert result.status_code == 201 and result.json()["author"] == "Barry"
+        assert result.status_code == 201 and result.json()["author"] == "User"
     async def run():
         params=StdioServerParameters(command=sys.executable,args=["-m","correspondence.mcp_server"],
             env={**os.environ,"CORRESPONDENCE_DATA_DIR":str(legacy),"CORRESPONDENCE_AUTHOR":"Claude"})
@@ -234,9 +242,10 @@ def test_current_http_posts_and_real_mcp_alias_retry(legacy):
             async with ClientSession(read,write) as session:
                 info=await session.initialize()
                 assert "configured author is Claude" in info.instructions
+                assert "board for Barry, Claude and Codex" in info.instructions
                 tools={tool.name:tool for tool in (await session.list_tools()).tools}
                 author_schema=tools["search_messages"].inputSchema["properties"]["author_filter"]
-                assert author_schema["anyOf"][0]["enum"] == ["Barry","Claude","Codex","Astra","Fable"]
+                assert author_schema["anyOf"][0]["enum"] == ["User","Claude","Codex","Astra","Fable"]
                 retry=await session.call_tool("post_message",{"thread_id":7,"body":"reply","parent_id":10,"request_id":"reply","compact":False})
                 assert retry.structuredContent["author"] == "Fable" and retry.structuredContent["id"] == 20
                 result=await session.call_tool("post_message",{"thread_id":7,"body":"Current writer"})
@@ -262,12 +271,12 @@ def test_pre_archive_schema_upgrade_preserves_messages_and_retry_identity(legacy
     before=snapshot(legacy)
     board=Store(legacy)
     after=snapshot(legacy)
-    assert after["messages"] == before["messages"] and after["threads"] == before["threads"]
+    assert after["messages"] == as_user(before["messages"]) and after["threads"] == before["threads"]
     assert [(r[0],r[1],r[2],r[4]) for r in after["requests"]] == [(r[0],r[1],r[2],r[4]) for r in before["requests"]]
     assert board.create_thread("Codex","demo","Review","opening",request_id="creation")["id"] == 7
     assert board.post_message("Claude",7,"reply",parent_id=10,request_id="reply")["id"] == 20
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
 
 
@@ -306,7 +315,7 @@ def test_wal_initialization_retries_real_lock_and_restores_timeout(legacy,monkey
     with board.connect() as con:
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA busy_timeout").fetchone()[0] == 15000
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_wal_lock_retry_is_bounded_and_other_errors_are_not_retried(legacy,monkeypatch):

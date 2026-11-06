@@ -32,7 +32,7 @@ def test_append_only_replies_and_attribution(board):
             con.execute("UPDATE messages SET body='tampered' WHERE id=?", (original["id"],))
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             con.execute("DELETE FROM messages WHERE id=?", (original["id"],))
-    assert len(board.read_thread("Barry", first)["messages"]) == 2
+    assert len(board.read_thread("User", first)["messages"]) == 2
 
 
 def test_read_marker_race_monotonicity_and_boundary(board):
@@ -65,7 +65,7 @@ def test_concurrent_idempotency_and_distinct_writes(board):
     with ThreadPoolExecutor(max_workers=8) as pool:
         ids = list(pool.map(post, range(20)))
     assert len(set(ids)) == 1
-    assert board.read_thread("Barry", first)["thread"]["message_count"] == 2
+    assert board.read_thread("User", first)["thread"]["message_count"] == 2
     with pytest.raises(Conflict):
         board.post_message("Claude", first, "Different", request_id="post-1")
     assert board.post_message("Claude", first, "Only once", request_id="post-1", model="Other model")["id"] == ids[0]
@@ -74,29 +74,29 @@ def test_concurrent_idempotency_and_distinct_writes(board):
         board.post_message("Claude", thread(board), "Only once", request_id="post-1")
     board.post_message("Codex", first, "Independent identity", request_id="post-1")
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda i: board.post_message("Barry", first, f"Concurrent {i}"), range(20)))
+        list(pool.map(lambda i: board.post_message("User", first, f"Concurrent {i}"), range(20)))
     assert board.read_thread("Claude", first)["thread"]["message_count"] == 23
 
 
 def test_pagination_search_and_export(board):
     first = thread(board, "100% precise_thing")
     board.post_message("Claude", first, "A reply", parent_id=1, model="Fable 5.1")
-    page = board.read_thread("Barry", first, limit=1)
+    page = board.read_thread("User", first, limit=1)
     assert page["has_more"]
-    page2 = board.read_thread("Barry", first, after=page["next_after"], limit=1)
+    page2 = board.read_thread("User", first, after=page["next_after"], limit=1)
     assert not page2["has_more"] and page2["messages"][0]["body"] == "A reply"
-    assert len(board.search_messages("Barry", "%")) == 1
-    assert board.search_messages("Barry", "_thing")[0]["project_name"] == "Demo"
-    assert not board.search_messages("Barry", "not present")
+    assert len(board.search_messages("User", "%")) == 1
+    assert board.search_messages("User", "_thing")[0]["project_name"] == "Demo"
+    assert not board.search_messages("User", "not present")
     board.post_message("Codex", first, "lead " * 200 + "NEEDLE" + " tail" * 200)
-    hit = board.search_messages("Barry", "needle")[0]
+    hit = board.search_messages("User", "needle")[0]
     assert "body" not in hit and "NEEDLE" in hit["snippet"] and hit["body_length"] == 2006
     assert hit["snippet"].startswith("…") and hit["snippet"].endswith("…") and len(hit["snippet"]) <= 302
-    budget = board.read_thread("Barry", first, max_bytes=1000)
+    budget = board.read_thread("User", first, max_bytes=1000)
     assert [m["id"] for m in budget["messages"]] == [1, 2] and budget["has_more"]
-    rest = board.read_thread("Barry", first, after=budget["next_after"], max_bytes=1000)
+    rest = board.read_thread("User", first, after=budget["next_after"], max_bytes=1000)
     assert len(rest["messages"]) == 1 and not rest["has_more"]
-    exported = board.export_thread("Barry", first)
+    exported = board.export_thread("User", first)
     assert "100% precise_thing" in exported and "Reply to: 1" in exported and "Model: Fable 5.1" in exported
 
 
@@ -119,7 +119,7 @@ def test_legacy_request_fingerprints_upgrade_once(tmp_path):
     with pytest.raises(Conflict):
         upgraded.post_message("Claude", first, "Changed", parent_id=1, request_id="old-reply")
     with upgraded.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_first_message_and_body_whitespace(board):
@@ -136,7 +136,7 @@ def test_status_audit_and_validation(board):
     result = board.set_thread_status("Claude", first, "resolved", "Fable 5.1")
     assert result["status"] == "resolved" and result["message_count"] == 2
     board.set_thread_status("Claude", first, "resolved")
-    audit = board.read_thread("Barry", first)["messages"][-1]
+    audit = board.read_thread("User", first)["messages"][-1]
     assert audit["author"] == "Claude" and audit["kind"] == "note"
     assert audit["body"] == "Discussion status changed from open to resolved."
     with pytest.raises(ValueError):
@@ -157,7 +157,7 @@ def long_board(board):
         message = board.post_message("Claude" if i % 3 == 0 else "Codex", primary, body)
         ids.append(message["id"])
         if i % 5 == 0:
-            board.post_message("Barry", other, "Interleave global message ids")
+            board.post_message("User", other, "Interleave global message ids")
     return board, primary, ids
 
 
@@ -266,19 +266,19 @@ def test_all_participant_acknowledgements_across_projects(board):
     second = board.create_thread("Claude", "demo", "Second", "Fable opening")["id"]
     board.create_project("other", "Other")
     board.create_project("empty", "Empty")
-    other = board.create_thread("Barry", "other", "Other discussion", "Barry opening")["id"]
-    barry_post = board.post_message("Barry", first, "Barry reply")
+    other = board.create_thread("User", "other", "Other discussion", "Barry opening")["id"]
+    barry_post = board.post_message("User", first, "Barry reply")
     second_astra = board.post_message("Codex", second, "Astra reply")
     fable_post = board.post_message("Claude", first, "Fable reply")
     board.post_message("Codex", other, "Other project reply")
     board.post_message("Codex", first, "Astra latest")
-    board.mark_read("Barry", first, barry_post["id"])
+    board.mark_read("User", first, barry_post["id"])
     board.mark_read("Codex", first, fable_post["id"])
     second_opening = board.read_thread("Claude", second)["thread"]["first_message_id"]
     board.mark_read("Claude", second, second_opening)
-    expected_markers = {"Barry": barry_post["id"], "Codex": fable_post["id"], "Claude": 0}
-    expected_counts = {"Barry": 2, "Codex": 0, "Claude": 3}
-    for participant in ("Barry", "Codex", "Claude"):
+    expected_markers = {"User": barry_post["id"], "Codex": fable_post["id"], "Claude": 0}
+    expected_counts = {"User": 2, "Codex": 0, "Claude": 3}
+    for participant in ("User", "Codex", "Claude"):
         metadata = board.read_thread(participant, first, mode="latest")["thread"]
         assert metadata["read_markers"] == expected_markers
         assert metadata["unread_counts"] == expected_counts
@@ -289,16 +289,16 @@ def test_all_participant_acknowledgements_across_projects(board):
         listed = dict(threads[first])
         assert listed.pop("last_excerpt") == "Astra latest"
         assert listed == metadata
-        assert threads[second]["unread_counts"] == {"Barry": 2, "Codex": 1, "Claude": 1}
+        assert threads[second]["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 1}
         projects = {row["id"]: row for row in board.list_projects(participant)}
-        assert projects["demo"]["unread_counts"] == {"Barry": 4, "Codex": 1, "Claude": 4}
-        assert projects["other"]["unread_counts"] == {"Barry": 1, "Codex": 1, "Claude": 2}
-        assert projects["empty"]["unread_counts"] == {"Barry": 0, "Codex": 0, "Claude": 0}
+        assert projects["demo"]["unread_counts"] == {"User": 4, "Codex": 1, "Claude": 4}
+        assert projects["other"]["unread_counts"] == {"User": 1, "Codex": 1, "Claude": 2}
+        assert projects["empty"]["unread_counts"] == {"User": 0, "Codex": 0, "Claude": 0}
         assert projects["demo"]["unread_count"] == projects["demo"]["unread_counts"][participant]
         board.search_messages(participant, "reply")
         board.export_thread(participant, first)
     # Opening, looking up, searching, and exporting never create acknowledgements.
-    assert board.read_thread("Barry", first)["thread"]["read_markers"] == expected_markers
+    assert board.read_thread("User", first)["thread"]["read_markers"] == expected_markers
     unread = {row["id"]: row for row in board.list_threads("Claude", "demo", unread_only=True)}
     assert unread[second]["first_unread_message_id"] == second_astra["id"]
 
@@ -314,18 +314,18 @@ def test_acknowledgement_maps_share_message_snapshot(board, monkeypatch):
         if not changed:
             changed.append(True)
             board.mark_read("Codex", first, last["id"])
-            board.post_message("Barry", first, "Arrived after snapshot")
+            board.post_message("User", first, "Arrived after snapshot")
         return snapshot
 
     monkeypatch.setattr(board, "_thread", change_after_metadata)
-    page = board.read_thread("Barry", first)
+    page = board.read_thread("User", first)
     assert len(page["messages"]) == 2
-    assert page["thread"]["read_markers"] == {"Barry": 0, "Codex": 0, "Claude": 0}
-    assert page["thread"]["unread_counts"] == {"Barry": 2, "Codex": 1, "Claude": 1}
+    assert page["thread"]["read_markers"] == {"User": 0, "Codex": 0, "Claude": 0}
+    assert page["thread"]["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 1}
     monkeypatch.setattr(board, "_thread", original)
-    fresh = board.read_thread("Barry", first)["thread"]
-    assert fresh["read_markers"] == {"Barry": 0, "Codex": last["id"], "Claude": 0}
-    assert fresh["unread_counts"] == {"Barry": 2, "Codex": 1, "Claude": 2}
+    fresh = board.read_thread("User", first)["thread"]
+    assert fresh["read_markers"] == {"User": 0, "Codex": last["id"], "Claude": 0}
+    assert fresh["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 2}
 
 
 def test_participant_metadata_queries_are_batched(board, monkeypatch):
@@ -344,9 +344,9 @@ def test_participant_metadata_queries_are_batched(board, monkeypatch):
     monkeypatch.setattr(board, "connect", traced_connect)
     threads = board.list_threads("Claude")
     assert len(threads) == 25 and len(reads) <= 4
-    assert all(row["unread_counts"] == {"Barry": 1, "Codex": 0, "Claude": 1} for row in threads)
+    assert all(row["unread_counts"] == {"User": 1, "Codex": 0, "Claude": 1} for row in threads)
     reads.clear()
-    assert board.list_projects("Claude")[0]["unread_counts"] == {"Barry": 25, "Codex": 0, "Claude": 25}
+    assert board.list_projects("Claude")[0]["unread_counts"] == {"User": 25, "Codex": 0, "Claude": 25}
     assert len(reads) <= 3
 
 
@@ -358,7 +358,7 @@ def test_search_scopes_and_cursor_preserve_interleaved_matches(board):
     for i in range(17):
         message = board.post_message("Claude", threads[i % 3], f"Needle match {i}")
         matches.append(message)
-        board.post_message("Barry", threads[(i + 1) % 3], "Nonmatching interleaved message")
+        board.post_message("User", threads[(i + 1) % 3], "Nonmatching interleaved message")
     board.mark_read("Codex", threads[0], matches[0]["id"])
     before_metadata = board.list_threads("Codex")
     cases = [({}, matches),
@@ -387,8 +387,8 @@ def test_search_scopes_and_cursor_preserve_interleaved_matches(board):
 def test_search_literal_filters_title_matches_and_validation(board):
     first = board.create_thread("Codex", "demo", r"Literal %_\ title", "Title match only")["id"]
     second = board.create_thread("Claude", "demo", "Ordinary", "Unrelated")["id"]
-    special = board.post_message("Barry", second, r"literal %_\ body")
-    board.post_message("Barry", second, "literal XX body")
+    special = board.post_message("User", second, r"literal %_\ body")
+    board.post_message("User", second, "literal XX body")
     for q in ("%", "_", "\\", "%_\\"):
         assert [hit["id"] for hit in board.search_messages("Claude", q, thread_id=second)] == [special["id"]]
         assert len(board.search_messages("Claude", q, thread_id=first)) == 1
@@ -405,52 +405,52 @@ def test_project_activity_tracks_posts_not_reads(board, monkeypatch):
     first = thread(board)
     clock[0] = '2026-09-16T02:00:00+00:00'
     second = thread(board)
-    projects = {p['id']: p for p in board.list_projects('Barry')}
+    projects = {p['id']: p for p in board.list_projects('User')}
     assert projects['demo']['last_activity_at'] == clock[0]
     assert projects['empty']['last_activity_at'] is None
     clock[0] = '2026-09-16T03:00:00+00:00'
     reply = board.post_message('Claude', first, 'New activity in older discussion', request_id='activity')
-    assert board.list_projects('Barry')[0]['last_activity_at'] == clock[0]
+    assert board.list_projects('User')[0]['last_activity_at'] == clock[0]
     clock[0] = '2026-09-16T04:00:00+00:00'
-    board.read_thread('Barry', first)
-    board.mark_read('Barry', first, reply['id'])
+    board.read_thread('User', first)
+    board.mark_read('User', first, reply['id'])
     board.post_message('Claude', first, 'New activity in older discussion', request_id='activity')
-    assert board.list_projects('Barry')[0]['last_activity_at'] == reply['created_at']
-    board.set_thread_status('Barry', second, 'resolved')
-    assert board.list_projects('Barry')[0]['last_activity_at'] == clock[0]
+    assert board.list_projects('User')[0]['last_activity_at'] == reply['created_at']
+    board.set_thread_status('User', second, 'resolved')
+    assert board.list_projects('User')[0]['last_activity_at'] == clock[0]
 
 
 def test_mark_all_read_covers_projects_resolved_and_own_posts(board):
     board.create_project("other", "Other")
     first = board.create_thread("Codex", "demo", "First", "Opening")["id"]
-    board.post_message("Barry", first, "My reply")
-    own_only = board.create_thread("Barry", "demo", "Own", "My opening")["id"]
+    board.post_message("User", first, "My reply")
+    own_only = board.create_thread("User", "demo", "Own", "My opening")["id"]
     resolved = board.create_thread("Claude", "other", "Resolved", "Other project")["id"]
     board.set_thread_status("Codex", resolved, "resolved")
-    first_last = board.read_thread("Barry", first)["thread"]["last_message_id"]
+    first_last = board.read_thread("User", first)["thread"]["last_message_id"]
     board.mark_read("Codex", first, first_last)
     board.mark_read("Claude", first, first_last)
-    before_threads = board.list_threads("Barry")
+    before_threads = board.list_threads("User")
     with board.connect() as con:
         messages_before = [tuple(row) for row in con.execute("SELECT * FROM messages ORDER BY id")]
         activity_before = [tuple(row) for row in con.execute("SELECT * FROM threads ORDER BY id")]
-        other_markers_before = [tuple(row) for row in con.execute("SELECT * FROM read_markers WHERE author!='Barry' ORDER BY author,thread_id")]
-    assert board.mark_all_read("Barry") == {"threads_marked": 2, "messages_marked": 3}
+        other_markers_before = [tuple(row) for row in con.execute("SELECT * FROM read_markers WHERE author!='User' ORDER BY author,thread_id")]
+    assert board.mark_all_read("User") == {"threads_marked": 2, "messages_marked": 3}
     for snapshot in before_threads:
-        current = board.read_thread("Barry", snapshot["id"])["thread"]
+        current = board.read_thread("User", snapshot["id"])["thread"]
         assert current["last_read_message_id"] == snapshot["last_message_id"]
         assert current["unread_count"] == 0
-    assert board.read_thread("Barry", own_only)["thread"]["last_read_message_id"] > 0
-    assert board.mark_all_read("Barry") == {"threads_marked": 0, "messages_marked": 0}
+    assert board.read_thread("User", own_only)["thread"]["last_read_message_id"] > 0
+    assert board.mark_all_read("User") == {"threads_marked": 0, "messages_marked": 0}
     with board.connect() as con:
         assert [tuple(row) for row in con.execute("SELECT * FROM messages ORDER BY id")] == messages_before
         assert [tuple(row) for row in con.execute("SELECT * FROM threads ORDER BY id")] == activity_before
-        assert [tuple(row) for row in con.execute("SELECT * FROM read_markers WHERE author!='Barry' ORDER BY author,thread_id")] == other_markers_before
+        assert [tuple(row) for row in con.execute("SELECT * FROM read_markers WHERE author!='User' ORDER BY author,thread_id")] == other_markers_before
 
 
 def test_mark_all_read_empty_board_and_no_listing_limit(tmp_path):
     board = Store(tmp_path)
-    assert board.mark_all_read("Barry") == {"threads_marked": 0, "messages_marked": 0}
+    assert board.mark_all_read("User") == {"threads_marked": 0, "messages_marked": 0}
     with pytest.raises(ValueError, match="Author"):
         board.mark_all_read("Imposter")
     board.create_project("many", "Many")
@@ -458,10 +458,10 @@ def test_mark_all_read_empty_board_and_no_listing_limit(tmp_path):
     # message, timestamp, and foreign-key invariants remain exercised.
     for index in range(1001):
         board.create_thread("Codex", "many", f"Discussion {index}", "Unread")
-    assert board.mark_all_read("Barry") == {"threads_marked": 1001, "messages_marked": 1001}
-    assert board.list_projects("Barry")[0]["unread_count"] == 0
+    assert board.mark_all_read("User") == {"threads_marked": 1001, "messages_marked": 1001}
+    assert board.list_projects("User")[0]["unread_count"] == 0
     with board.connect() as con:
-        assert con.execute("SELECT COUNT(*) FROM read_markers WHERE author='Barry'").fetchone()[0] == 1001
+        assert con.execute("SELECT COUNT(*) FROM read_markers WHERE author='User'").fetchone()[0] == 1001
 
 
 def test_mark_all_read_excludes_writer_waiting_for_commit(board, monkeypatch):
@@ -470,7 +470,7 @@ def test_mark_all_read_excludes_writer_waiting_for_commit(board, monkeypatch):
     from threading import Event, current_thread
 
     thread_id = thread(board)
-    previous_last = board.read_thread("Barry", thread_id)["thread"]["last_message_id"]
+    previous_last = board.read_thread("User", thread_id)["thread"]["last_message_id"]
     writer = Store(board.directory)
     attempted = Event()
     original_connect = sqlite3.connect
@@ -498,10 +498,25 @@ def test_mark_all_read_excludes_writer_waiting_for_commit(board, monkeypatch):
                 yield con
 
         monkeypatch.setattr(board, "connect", held_bulk_transaction)
-        assert board.mark_all_read("Barry") == {"threads_marked": 1, "messages_marked": 1}
+        assert board.mark_all_read("User") == {"threads_marked": 1, "messages_marked": 1}
         arrival = arrivals[0].result(timeout=3)
     monkeypatch.setattr(board, "connect", original_board_connect)
-    snapshot = board.read_thread("Barry", thread_id)["thread"]
+    snapshot = board.read_thread("User", thread_id)["thread"]
     assert snapshot["last_read_message_id"] == previous_last
     assert snapshot["last_message_id"] == arrival["id"]
     assert snapshot["unread_count"] == 1
+
+
+def test_the_human_is_stored_as_user_and_shown_by_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORRESPONDENCE_USER_NAME", "Ada")
+    board = Store(tmp_path / "named")
+    assert board.user_name() == "Ada"
+    board.create_project("demo", "Demo")
+    thread = board.create_thread("User", "demo", "Plan", "Opening")["id"]
+    assert board.read_thread("Claude", thread)["messages"][0]["author"] == "User"
+    assert "· Ada · note" in board.export_thread("Claude", thread)
+    monkeypatch.delenv("CORRESPONDENCE_USER_NAME")
+    assert Store(tmp_path / "plain").user_name() == "User"
+    assert board.set_user_name("  Grace ") == "Grace" and Store(board.directory).user_name() == "Grace"
+    with pytest.raises(ValueError):
+        board.create_thread("Barry", "demo", "Plan", "Opening")

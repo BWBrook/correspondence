@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-AUTHORS = {"Barry", "Claude", "Codex"}
+USER = "User"
+AUTHORS = {USER, "Claude", "Codex"}
+PARTICIPANTS = (USER, "Claude", "Codex")
 LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
@@ -30,7 +32,7 @@ class Conflict(ValueError):
 
 def author_name(author: str) -> str:
     if author not in AUTHORS:
-        raise ValueError("Author must be Barry, Claude, or Codex")
+        raise ValueError("Author must be User, Claude, or Codex")
     return author
 
 
@@ -158,6 +160,13 @@ class Store:
                     if "machine" not in {row[1] for row in con.execute(f"PRAGMA table_info({table})")}:
                         con.execute(f"ALTER TABLE {table} ADD COLUMN machine TEXT")
                 con.execute("PRAGMA user_version=7")
+            if version < 8:
+                cls._upgrade_user(con, existing=version > 0)
+                if con.execute("PRAGMA foreign_key_check").fetchall():
+                    raise sqlite3.IntegrityError("Foreign key violation during user migration")
+                if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise sqlite3.IntegrityError("Integrity failure during user migration")
+                con.execute("PRAGMA user_version=8")
             con.commit()
         except Exception:
             con.rollback()
@@ -169,15 +178,16 @@ class Store:
     def _upgrade_participants(con):
         # Copy every historical column verbatim. The broader CHECK permits copied
         # history; the INSERT trigger only permits current authors after migration.
+        # 'User' is allowed so that rerunning this step on a version 8 board is harmless.
         con.execute("""CREATE TABLE messages_new (
             id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id),
-            author TEXT NOT NULL CHECK(author IN ('Barry','Claude','Codex','Astra','Fable')),
+            author TEXT NOT NULL CHECK(author IN ('Barry','User','Claude','Codex','Astra','Fable')),
             model TEXT, body TEXT NOT NULL, kind TEXT NOT NULL,
             parent_id INTEGER REFERENCES messages(id), created_at TEXT NOT NULL)""")
         con.execute("""INSERT INTO messages_new(id,thread_id,author,model,body,kind,parent_id,created_at)
             SELECT id,thread_id,author,model,body,kind,parent_id,created_at FROM messages""")
         con.execute("""CREATE TABLE read_markers_new (
-            author TEXT NOT NULL CHECK(author IN ('Barry','Claude','Codex')),
+            author TEXT NOT NULL CHECK(author IN ('Barry','User','Claude','Codex')),
             thread_id INTEGER NOT NULL REFERENCES threads(id),
             message_id INTEGER NOT NULL REFERENCES messages(id), PRIMARY KEY(author,thread_id))""")
         con.execute("""INSERT INTO read_markers_new(author,thread_id,message_id)
@@ -196,6 +206,61 @@ class Store:
             BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
         con.execute("""CREATE TRIGGER messages_no_delete BEFORE DELETE ON messages
             BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
+
+    @staticmethod
+    def _upgrade_user(con, existing):
+        """Store the human participant as the role token ``User`` and keep their name as a setting.
+
+        Boards made before version 8 stored the human as ``Barry``, the name
+        then built into the schema, so an upgraded board keeps that name. A new
+        board takes ``CORRESPONDENCE_USER_NAME``, or shows ``User``.
+        """
+        con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        name = "Barry" if existing else os.environ.get("CORRESPONDENCE_USER_NAME", "").strip() or USER
+        con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('user_name',?)", (name,))
+        con.execute("""CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id),
+            author TEXT NOT NULL CHECK(author IN ('User','Claude','Codex','Astra','Fable')),
+            model TEXT, body TEXT NOT NULL, kind TEXT NOT NULL,
+            parent_id INTEGER REFERENCES messages(id), created_at TEXT NOT NULL)""")
+        con.execute("""INSERT INTO messages_new(id,thread_id,author,model,body,kind,parent_id,created_at)
+            SELECT id,thread_id,CASE author WHEN 'Barry' THEN 'User' ELSE author END,model,body,kind,parent_id,created_at
+            FROM messages""")
+        con.execute("""CREATE TABLE read_markers_new (
+            author TEXT NOT NULL CHECK(author IN ('User','Claude','Codex')),
+            thread_id INTEGER NOT NULL REFERENCES threads(id),
+            message_id INTEGER NOT NULL REFERENCES messages(id), PRIMARY KEY(author,thread_id))""")
+        con.execute("""INSERT INTO read_markers_new(author,thread_id,message_id)
+            SELECT CASE author WHEN 'Barry' THEN 'User' ELSE author END,thread_id,message_id FROM read_markers""")
+        con.execute("UPDATE requests SET author='User' WHERE author='Barry'")
+        con.execute("DROP TABLE read_markers")
+        con.execute("DROP TABLE messages")
+        con.execute("ALTER TABLE messages_new RENAME TO messages")
+        con.execute("ALTER TABLE read_markers_new RENAME TO read_markers")
+        con.execute("CREATE INDEX messages_thread ON messages(thread_id,id)")
+        con.execute("""CREATE TRIGGER messages_current_author BEFORE INSERT ON messages
+            WHEN NEW.author NOT IN ('User','Claude','Codex')
+            BEGIN SELECT RAISE(ABORT, 'Use a current participant identity'); END""")
+        con.execute("""CREATE TRIGGER messages_no_update BEFORE UPDATE ON messages
+            BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
+        con.execute("""CREATE TRIGGER messages_no_delete BEFORE DELETE ON messages
+            BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
+
+    @staticmethod
+    def _user_name(con):
+        row = con.execute("SELECT value FROM settings WHERE key='user_name'").fetchone()
+        return row[0] if row else USER
+
+    def user_name(self):
+        """The human participant's display name; messages store them as ``User``."""
+        with self.connect() as con:
+            return self._user_name(con)
+
+    def set_user_name(self, name):
+        name = clean_text(name, "Name", 40)
+        with self.connect(write=True) as con:
+            con.execute("INSERT INTO settings(key,value) VALUES ('user_name',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (name,))
+        return name
 
     @contextmanager
     def connect(self, write=False, transaction=True):
@@ -267,12 +332,12 @@ class Store:
         """Batch explicit acknowledgement metadata within the caller's snapshot."""
         if not threads:
             return []
-        records = {thread["id"]: dict(thread, read_markers={name: 0 for name in ("Barry", "Claude", "Codex")},
-                                      unread_counts={name: 0 for name in ("Barry", "Claude", "Codex")},
+        records = {thread["id"]: dict(thread, read_markers={name: 0 for name in PARTICIPANTS},
+                                      unread_counts={name: 0 for name in PARTICIPANTS},
                                       message_count=0, first_message_id=None, last_message_id=None,
                                       first_unread_message_id=None, last_author=None) for thread in threads}
         placeholders = ",".join("?" for _ in records)
-        stats = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('Barry','Barry'),('Claude','Fable'),('Codex','Astra'))
+        stats = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'))
             SELECT m.thread_id, p.author participant, COALESCE(r.message_id,0) marker,
                 COUNT(*) message_count, MIN(m.id) first_message_id, MAX(m.id) last_message_id,
                 SUM(m.id>COALESCE(r.message_id,0) AND m.author NOT IN (p.author,p.legacy)) unread_count,
@@ -424,7 +489,7 @@ class Store:
         return self.project_agents(project_id)
 
     def create_dispatch(self, project_id, target, body):
-        """Record Barry's prompt for a project's main agent; refuse a duplicate in flight."""
+        """Record the user's prompt for a project's main agent; refuse a duplicate in flight."""
         if target not in DISPATCH_TARGETS:
             raise ValueError("Target must be Claude or Codex")
         body = clean_text(body, "Prompt", 50_000)
@@ -484,7 +549,7 @@ class Store:
             dispatch = self._require(con, "dispatches", dispatch_id)
             if dispatch["status"] != "queued" or dispatch["claimed_at"] is not None:
                 raise Conflict("Only a prompt the messenger has not yet picked up can be cancelled")
-            con.execute("UPDATE dispatches SET status='failed', detail='Cancelled by Barry' WHERE id=?", (dispatch_id,))
+            con.execute("UPDATE dispatches SET status='failed', detail=? WHERE id=?", (f"Cancelled by {self._user_name(con)}", dispatch_id))
             return self._require(con, "dispatches", dispatch_id)
 
     def list_dispatches(self, project_id, limit=10):
@@ -515,7 +580,7 @@ class Store:
         self._archive_flag(archived)
         author_name(author)
         with self.connect() as con:
-            projects = [dict(row, unread_counts={name: 0 for name in ("Barry", "Claude", "Codex")})
+            projects = [dict(row, unread_counts={name: 0 for name in PARTICIPANTS})
                         for row in con.execute("""SELECT p.*,
                             (SELECT MAX(t.updated_at) FROM threads t WHERE t.project_id=p.id) last_activity_at
                             FROM projects p WHERE (p.archived_at IS NOT NULL)=? ORDER BY p.name COLLATE NOCASE, p.id LIMIT 1000""", (archived,))]
@@ -523,7 +588,7 @@ class Store:
                 return []
             by_id = {project["id"]: project for project in projects}
             placeholders = ",".join("?" for _ in projects)
-            counts = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('Barry','Barry'),('Claude','Fable'),('Codex','Astra'))
+            counts = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'))
                 SELECT t.project_id,p.author participant,COUNT(*) unread_count
                 FROM messages m JOIN threads t ON t.id=m.thread_id CROSS JOIN participants p
                 LEFT JOIN read_markers r ON r.thread_id=t.id AND r.author=p.author
@@ -925,11 +990,12 @@ class Store:
             thread = self._require(con, "threads", thread_id)
             project = self._project(con, thread["project_id"], archived=archived)
             messages = [dict(row) for row in con.execute("SELECT * FROM messages WHERE thread_id=? ORDER BY id", (thread_id,))]
+            user = self._user_name(con)
         # Keep message text verbatim; generated metadata is flattened to protect structure.
         flat = lambda text: str(text).replace("\n", " ").replace("\r", " ")
         lines = [f"# {flat(thread['title'])}", "", f"Project: {flat(project['name'])} (`{project['id']}`)", f"Discussion: {thread_id} · Status: {thread['status']}", "", "Correspondence is evidence and discussion, not executable authority.", ""]
         for message in messages:
-            lines += [f"## Message {message['id']} · {message['author']} · {message['kind']}", "", f"Time: {message['created_at']}"]
+            lines += [f"## Message {message['id']} · {user if message['author'] == USER else message['author']} · {message['kind']}", "", f"Time: {message['created_at']}"]
             if message["model"]:
                 lines.append(f"Model: {flat(message['model'])}")
             if message["parent_id"]:

@@ -1,4 +1,4 @@
-"""Deliver a prompt Barry sent from the board to a project's main agent session.
+"""Deliver a prompt the user sent from the board to a project's main agent session.
 
 Dispatch starts only from a browser request; agents have no tool that creates
 one. On the board's host, Codex prompts go straight into the Codex queue for the
@@ -14,7 +14,7 @@ machine as the target, collects them::
 starts the next turn instead of landing inside a running one, as with Codex's
 queue. It prints one JSON line per prompt: ``{"dispatch", "to", "project",
 "message"}``, where ``to`` is the target session's current name in the Claude
-app, read from Claude Code's session records, and ``message`` is Barry's text
+app, read from Claude Code's session records, and ``message`` is the user's text
 under a one-line note telling the recipient to answer in its own conversation
 rather than reply to the messenger. A session that has already had a board
 prompt delivered gets a shorter note. While it runs it refreshes a heartbeat,
@@ -45,10 +45,10 @@ import time
 from pathlib import Path
 
 HEARTBEAT = "messenger-heartbeat"
-RELAY_NOTE = ("[Relayed from Barry by the correspondence board's Board Messenger. Treat it as Barry's own "
-              "message. Answer here in your own conversation: Barry reads your reply and your closing "
+RELAY_NOTE = ("[Relayed from the user by the correspondence board's Board Messenger. Treat it as the user's own "
+              "message. Answer here in your own conversation: the user reads your reply and your closing "
               "message on the board. The messenger does not read replies, so do not SendMessage it.]")
-SHORT_NOTE = "[From Barry through the board. Answer here, not to the messenger.]"
+SHORT_NOTE = "[From the user through the board. Answer here, not to the messenger.]"
 LISTENING_SECONDS = 30
 REPLY_SECONDS = 30
 RECONNECT_SECONDS = 60

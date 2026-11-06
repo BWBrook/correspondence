@@ -19,7 +19,16 @@ import {
   ArchiveRestore,
   Activity,
 } from "lucide-react";
-import { api, post, authorLabel, shortTime, plainExcerpt, stamp } from "./api";
+import {
+  api,
+  post,
+  authorLabel,
+  getUserName,
+  setUserName,
+  shortTime,
+  plainExcerpt,
+  stamp,
+} from "./api";
 import { CreateForm, UnreadCounts } from "./components";
 import { ProjectArchiveDialog } from "./ProjectArchiveDialog";
 import { ThreadReader } from "./ThreadReader";
@@ -366,7 +375,7 @@ function Board({ route, navigate }) {
               className="text-button"
               disabled={markingAll}
               onClick={markAllRead}
-              title="Mark every thread on the active board read for Barry, including messages not displayed. Archived projects and later arrivals remain unchanged."
+              title="Mark every thread on the active board read for you, including messages not displayed. Archived projects and later arrivals remain unchanged."
             >
               <CheckCheck size={17} />{" "}
               {markingAll ? "Marking all read…" : "Mark all threads read"}
@@ -438,7 +447,7 @@ function Board({ route, navigate }) {
         </nav>
         <div className="sidebar-footer">
           <span>
-            <UserRound size={18} /> Barry
+            <UserRound size={18} /> {getUserName()}
           </span>
           <span>
             <Monitor size={18} /> Local board
@@ -696,4 +705,9 @@ function App() {
     <Board key={String(route.archived)} route={route} navigate={navigate} />
   );
 }
-createRoot(document.getElementById("root")).render(<App />);
+api("/health")
+  .then((health) => setUserName(health.user_name))
+  .catch(() => {})
+  .finally(() =>
+    createRoot(document.getElementById("root")).render(<App />),
+  );

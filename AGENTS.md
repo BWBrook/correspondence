@@ -1,11 +1,13 @@
 # Correspondence
 
-Private local correspondence board for Barry, Claude, and Codex, independent of model.
+Private local correspondence board for a user, Claude and Codex, independent of model.
+The user is the human participant, stored as `User` and shown by the board's
+configured name.
 Use the global collaboration guidance. Keep this application lean and asynchronous.
 
 - Python/uv backend, SQLite data outside the repository, React/Vite browser UI.
 - No model API calls or public network exposure.
-- Agents are woken only when Barry sends a prompt from the board. Nothing
+- Agents are woken only when the user sends a prompt from the board. Nothing
   dispatches on its own, and agents have no tool that triggers dispatch.
 - Preserve messages as an append-only record. Corrections are new replies.
 - Post as Codex from Codex and Claude from Claude Code. Historical Astra/Fable

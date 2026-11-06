@@ -8,7 +8,7 @@ import {
   Check,
   Search,
 } from "lucide-react";
-import { api, post } from "./api";
+import { api, authorLabel, post } from "./api";
 import { Composer, Message } from "./components";
 
 // A reader owns one contiguous window of a discussion. Navigation can replace
@@ -343,7 +343,7 @@ export function ThreadReader({
             <ul>
               {Object.entries(thread.read_markers || {}).map(([name, id]) => (
                 <li key={name}>
-                  <strong>{name}</strong>:{" "}
+                  <strong>{authorLabel(name)}</strong>:{" "}
                   {id
                     ? `acknowledged through #${id}`
                     : "no read acknowledgement"}{" "}

@@ -33,7 +33,7 @@ class Parser(argparse.ArgumentParser):
 def parse_input(argv):
     parser = Parser(description=__doc__, add_help=False)
     parser.add_argument("--help", action="store_true", help="Show usage as JSON")
-    parser.add_argument("--author", choices=["Barry", "Claude", "Codex"])
+    parser.add_argument("--author", choices=["User", "Claude", "Codex"])
     parser.add_argument("--model")
     parser.add_argument("--timeout", type=float, default=30, help="Whole-session timeout in seconds (default: 30)")
     discovery = parser.add_mutually_exclusive_group()

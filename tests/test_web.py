@@ -14,20 +14,20 @@ HEADERS = {"X-Correspondence-Client": "browser", "Origin": "http://127.0.0.1:876
 
 
 def test_browser_identity_and_end_to_end(client):
-    assert client.get("/api/health").json()["participant"] == "Barry"
+    assert client.get("/api/health").json()["participant"] == "User"
     assert client.post("/api/projects", json={"id": "demo", "name": "Demo"}, headers=HEADERS).status_code == 201
     result = client.post("/api/threads", json={"project_id": "demo", "title": "Test", "body": "Initial", "request_id": "thread-key"}, headers=HEADERS)
     assert result.status_code == 201
     thread_id = result.json()["id"]
     message = client.get(f"/api/threads/{thread_id}").json()["messages"][0]
-    assert message["author"] == "Barry" and message["model"] is None
+    assert message["author"] == "User" and message["model"] is None
     assert client.post(f"/api/threads/{thread_id}/messages", json={"body": "forged", "author": "Codex"}, headers=HEADERS).status_code == 422
     assert client.post(f"/api/threads/{thread_id}/messages", json={"body": "Reply", "parent_id": message["id"]}, headers=HEADERS).status_code == 201
     assert client.post(f"/api/threads/{thread_id}/read", json={"message_id": message["id"]}, headers=HEADERS).status_code == 200
     assert client.post(f"/api/threads/{thread_id}/status", json={"status": "resolved"}, headers=HEADERS).json()["status"] == "resolved"
     assert len(client.get("/api/search?q=Reply").json()) == 1
     exported = client.get(f"/api/threads/{thread_id}/export")
-    assert "text/markdown" in exported.headers["content-type"] and "Barry" in exported.text
+    assert "text/markdown" in exported.headers["content-type"] and "User" in exported.text
     assert client.get("/api/threads/999").status_code == 404
 
 
@@ -48,7 +48,7 @@ def test_read_navigation_and_exact_message_api(client):
     board = client.app.state.store
     board.create_project("navigation", "Navigation")
     thread_id = board.create_thread("Codex", "navigation", "Long discussion", "First")["id"]
-    middle = board.post_message("Barry", thread_id, "Own message")
+    middle = board.post_message("User", thread_id, "Own message")
     last = board.post_message("Claude", thread_id, "Newest message")
     latest = client.get(f"/api/threads/{thread_id}?mode=latest&limit=1").json()
     assert latest["messages"] == [last]
@@ -63,7 +63,7 @@ def test_read_navigation_and_exact_message_api(client):
     assert client.get(f"/api/threads/{thread_id}?after=1&before=3").status_code == 422
     assert client.get(f"/api/threads/{thread_id}?before=0").status_code == 422
     assert client.get(f"/api/threads/{thread_id}?mode=bad").status_code == 422
-    assert board.read_thread("Barry", thread_id)["thread"]["last_read_message_id"] == 0
+    assert board.read_thread("User", thread_id)["thread"]["last_read_message_id"] == 0
     client.post(f"/api/threads/{thread_id}/read", json={"message_id": first_id}, headers=HEADERS)
     unread = client.get(f"/api/threads/{thread_id}?mode=unread").json()
     assert unread["messages"] == [last]  # Barry's own intervening post is skipped.
@@ -138,7 +138,7 @@ def test_search_endpoint_scope_cursor_and_validation(client):
     for field in ("thread_id", "before"):
         for value in (0, -1, "abc", 2**63):
             assert client.get("/api/search", params={"q": "match", field: value}).status_code == 422
-    assert board.read_thread("Barry", first)["thread"]["last_read_message_id"] == 0
+    assert board.read_thread("User", first)["thread"]["last_read_message_id"] == 0
 
 
 def test_mark_all_read_http_identity_payload_and_origin(client):
@@ -151,12 +151,12 @@ def test_mark_all_read_http_identity_payload_and_origin(client):
     assert client.post("/api/read-all", json={"author": "Claude"}, headers=HEADERS).status_code == 422
     assert client.post("/api/read-all", json={"thread_id": thread_id}, headers=HEADERS).status_code == 422
     assert client.post("/api/read-all", headers={**HEADERS, "Content-Type": "application/json"}).status_code == 422
-    assert board.read_thread("Barry", thread_id)["thread"]["read_markers"] == {"Barry": 0, "Codex": 0, "Claude": 0}
+    assert board.read_thread("User", thread_id)["thread"]["read_markers"] == {"User": 0, "Codex": 0, "Claude": 0}
     response = client.post("/api/read-all", json={}, headers=HEADERS)
     assert response.status_code == 200
     assert response.json() == {"threads_marked": 1, "messages_marked": 1}
-    metadata = board.read_thread("Barry", thread_id)["thread"]
-    assert metadata["read_markers"] == {"Barry": metadata["last_message_id"], "Codex": 0, "Claude": 0}
+    metadata = board.read_thread("User", thread_id)["thread"]
+    assert metadata["read_markers"] == {"User": metadata["last_message_id"], "Codex": 0, "Claude": 0}
     assert client.post("/api/read-all", json={}, headers=HEADERS).json() == {"threads_marked": 0, "messages_marked": 0}
 
 

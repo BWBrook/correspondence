@@ -21,7 +21,7 @@ def board(tmp_path):
     store.create_project("old", "Old", "Description", "/tmp/example")
     store.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation")
     store.post_message("Claude", 1, "needle reply", parent_id=1, model="Fable", request_id="reply")
-    store.mark_read("Barry", 1, 1)
+    store.mark_read("User", 1, 1)
     store.set_thread_status("Codex", 1, "resolved")
     return store
 
@@ -69,63 +69,63 @@ def test_every_read_surface_selects_exact_archive_view(board):
     board.create_project("active", "Active")
     active = board.create_thread("Codex", "active", "Review needle", "needle active")
     active_message = active["last_message_id"]
-    lists = [lambda flag: board.list_projects("Barry", archived=flag),
-             lambda flag: board.list_threads("Barry", archived=flag),
-             lambda flag: board.list_threads_page("Barry", archived=flag)["items"],
-             lambda flag: board.search_threads("Barry", "needle", archived=flag)["items"]]
+    lists = [lambda flag: board.list_projects("User", archived=flag),
+             lambda flag: board.list_threads("User", archived=flag),
+             lambda flag: board.list_threads_page("User", archived=flag)["items"],
+             lambda flag: board.search_threads("User", "needle", archived=flag)["items"]]
     for read in lists:
         assert len(read(False)) == len(read(True)) == 1
         assert read(False)[0]["id"] in ("active", active["id"])
         assert read(True)[0]["id"] in (archive["id"], 1)
-    message_lists = [lambda flag: board.inbox("Barry", archived=flag)["items"],
-                     lambda flag: board.search_messages("Barry", "needle", archived=flag),
-                     lambda flag: board.search_messages_page("Barry", "needle", archived=flag)["items"]]
+    message_lists = [lambda flag: board.inbox("User", archived=flag)["items"],
+                     lambda flag: board.search_messages("User", "needle", archived=flag),
+                     lambda flag: board.search_messages_page("User", "needle", archived=flag)["items"]]
     for read in message_lists:
         assert {m["thread_id"] for m in read(False)} == {active["id"]}
         assert {m["thread_id"] for m in read(True)} == {1}
-    for direct in [lambda flag: board.read_thread("Barry", 1, archived=flag),
-                   lambda flag: board.read_updates("Barry", 1, archived=flag),
-                   lambda flag: board.get_message("Barry", 2, archived=flag),
-                   lambda flag: board.export_thread("Barry", 1, archived=flag)]:
+    for direct in [lambda flag: board.read_thread("User", 1, archived=flag),
+                   lambda flag: board.read_updates("User", 1, archived=flag),
+                   lambda flag: board.get_message("User", 2, archived=flag),
+                   lambda flag: board.export_thread("User", 1, archived=flag)]:
         with pytest.raises(NotFound):
             direct(False)
         assert direct(True)
     with pytest.raises(NotFound):
-        board.read_thread("Barry", active["id"], archived=True)
-    batch = board.get_messages("Barry", [2, active_message], include_parents=True)
+        board.read_thread("User", active["id"], archived=True)
+    batch = board.get_messages("User", [2, active_message], include_parents=True)
     assert batch["missing_ids"] == [2] and [m["id"] for m in batch["messages"]] == [active_message]
-    batch = board.get_messages("Barry", [2, active_message], include_parents=True, archived=True)
+    batch = board.get_messages("User", [2, active_message], include_parents=True, archived=True)
     assert batch["missing_ids"] == [active_message] and [m["id"] for m in batch["messages"]] == [2, 1]
-    assert not board.inbox("Barry", project_id=archive["id"])["items"]
-    assert not board.search_messages_page("Barry", "needle", project_id="active", archived=True)["items"]
+    assert not board.inbox("User", project_id=archive["id"])["items"]
+    assert not board.search_messages_page("User", "needle", project_id="active", archived=True)["items"]
 
 
 def test_archived_mutations_and_retries_fail_without_changing_state(board):
     archive = board.archive_project("old", token(board, "old"))
     before = records(board)
     writes = [lambda: board.create_project(archive["id"], "Old", "Description", "/tmp/example"),
-              lambda: board.create_thread("Barry", archive["id"], "New", "Forbidden"),
+              lambda: board.create_thread("User", archive["id"], "New", "Forbidden"),
               lambda: board.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation"),
               lambda: board.post_message("Claude", 1, "needle reply", parent_id=1, request_id="reply"),
-              lambda: board.post_message("Barry", 1, "Forbidden"),
-              lambda: board.mark_read("Barry", 1, 2),
-              lambda: board.set_thread_status("Barry", 1, "resolved"),
-              lambda: board.set_thread_status("Barry", 1, "open")]
+              lambda: board.post_message("User", 1, "Forbidden"),
+              lambda: board.mark_read("User", 1, 2),
+              lambda: board.set_thread_status("User", 1, "resolved"),
+              lambda: board.set_thread_status("User", 1, "open")]
     for write in writes:
         with pytest.raises(NotFound):
             write()
         assert records(board) == before
-    assert board.mark_all_read("Barry") == {"threads_marked": 0, "messages_marked": 0}
+    assert board.mark_all_read("User") == {"threads_marked": 0, "messages_marked": 0}
     assert records(board) == before
     # Reusing the released slug does not make an archived retry accessible.
     board.create_project("old", "Fresh")
     with pytest.raises(NotFound):
         writes[2]()
     active = board.create_thread("Claude", "old", "New discussion", "new body")
-    assert board.mark_all_read("Barry") == {"threads_marked": 1, "messages_marked": 1}
-    archived_read = board.read_thread("Barry", 1, archived=True)
+    assert board.mark_all_read("User") == {"threads_marked": 1, "messages_marked": 1}
+    archived_read = board.read_thread("User", 1, archived=True)
     assert archived_read["thread"]["last_read_message_id"] == 1
-    assert board.read_thread("Barry", active["id"])["thread"]["unread_count"] == 0
+    assert board.read_thread("User", active["id"])["thread"]["unread_count"] == 0
 
 
 def test_restore_collisions_and_repeated_cycles(board):
@@ -136,7 +136,7 @@ def test_restore_collisions_and_repeated_cycles(board):
     restored = board.restore_project(first["id"], token(board, first["id"]))
     assert restored["id"] == "old-restored-3" and restored["name"] == "Old (restored 3)"
     assert records(board)["projects"][1:] == before["projects"][1:]
-    assert board.read_thread("Barry", 1)["thread"]["project_id"] == restored["id"]
+    assert board.read_thread("User", 1)["thread"]["project_id"] == restored["id"]
     assert records(board)["requests"] == before["requests"]
     for _ in range(3):
         archive = board.archive_project(restored["id"], token(board, restored["id"]))
@@ -180,9 +180,9 @@ def test_concurrent_schema1_migration_and_reopen_do_not_rehash(board):
         reopened = list(pool.map(lambda _: Store(board.directory), range(6)))
     assert records(reopened[0])["requests"] == before["requests"]
     with reopened[0].connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
-    assert reopened[0].list_projects("Barry", archived=True)[0]["id"] == archive["id"]
+    assert reopened[0].list_projects("User", archived=True)[0]["id"] == archive["id"]
 
 
 def test_simultaneous_archive_restore_calls_are_atomic(board):
@@ -196,7 +196,7 @@ def test_simultaneous_archive_restore_calls_are_atomic(board):
         results = list(pool.map(archive, range(4)))
     assert sum(item is not None for item in results) == 1
     result = next(item for item in results if item)
-    assert len(board.list_projects("Barry", archived=True)) == 1
+    assert len(board.list_projects("User", archived=True)) == 1
     def restore(_):
         try:
             return board.restore_project(result["id"], result["state_token"])
@@ -205,7 +205,7 @@ def test_simultaneous_archive_restore_calls_are_atomic(board):
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(restore, range(4)))
     assert sum(item is not None for item in results) == 1
-    assert len(board.list_projects("Barry")) == 1 and not board.list_projects("Barry", archived=True)
+    assert len(board.list_projects("User")) == 1 and not board.list_projects("User", archived=True)
     assert len(records(board)["messages"]) == 3
     with board.connect() as con:
         assert not con.execute("PRAGMA foreign_key_check").fetchall()
@@ -322,6 +322,6 @@ def test_schema2_upgrade_generates_tokens_once_and_preserves_archives(board):
     assert len({row["state_token"] for row in after["projects"]}) == 2
     assert all(len(row["state_token"]) == 32 for row in after["projects"])
     assert records(Store(board.directory)) == after
-    assert stores[0].list_projects("Barry", archived=True)[0]["id"] == archived["id"]
+    assert stores[0].list_projects("User", archived=True)[0]["id"] == archived["id"]
     with board.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8

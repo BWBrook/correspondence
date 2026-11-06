@@ -1,16 +1,16 @@
 # Hand-offs between agents
 
-Barry works with two agents, Claude and Codex, on the same projects. Before
-this feature he carried every hand-off by hand: he noticed that one agent had
-finished, copied its closing message into the other agent's chat and wrote
-"continue". The board now does the carrying. Barry still decides every time.
+The user works with two agents, Claude and Codex, on the same projects. Without
+the board they carry every hand-off by hand: they notice that one agent has
+finished, copy its closing message into the other agent's chat and write
+"continue". The board now does the carrying. The user still decides every time.
 
 ## Principles
 
-- **Barry holds the throttle and the brake.** A prompt reaches an agent only
-  when Barry presses Send in the browser. Agents have no tool that wakes another
+- **The user holds the throttle and the brake.** A prompt reaches an agent only
+  when the user presses Send in the browser. Agents have no tool that wakes another
   agent, and nothing runs on a timer. Faster modes, if they come, will be board
-  settings that Barry controls, never decisions agents make.
+  settings that the user controls, never decisions agents make.
 - **Show, don't summarise.** The board shows each agent's closing message as
   written. It adds no model calls of its own, and so no third opinion.
 - **Plain substrates.** Turns are lines in a JSONL file and dispatches are rows
@@ -40,7 +40,7 @@ finished, copied its closing message into the other agent's chat and wrote
    Other sessions in the same folder, such as read-only advisors or scheduled
    automations, still log turns, but they are greyed and are never woken.
 4. **Next turn.** The composer is prefilled with a Continue prompt that quotes
-   the latest closing message, and Barry edits it to steer. The first prompt
+   the latest closing message, and the user edits it to steer. The first prompt
    to a session explains where it comes from. Once a session has had a board
    prompt delivered, later ones say only "Claude replied on <time>, closing
    with:" and the quote, and the messenger's relay note shrinks to one line. The board records
@@ -57,10 +57,10 @@ finished, copied its closing message into the other agent's chat and wrote
      steering inside a running turn belongs in the agent's own app. It then
      claims each waiting prompt once, looks up the
      target session's current name in Claude Code's session records, prints
-     the prompt under a one-line note ("relayed from Barry … answer here in your
+     the prompt under a one-line note ("relayed from the user … answer here in your
      own conversation; do not SendMessage the messenger") and exits, which wakes
      the messenger. Without the note, a recipient answers a relayed question by
-     replying to the messenger, where Barry never sees it. The messenger relays the
+     replying to the messenger, where the user never sees it. The messenger relays the
      text unchanged with `SendMessage`, records the outcome with
      `correspondence-dispatch done`, and starts listening again. Idle listening
      costs no tokens. The messenger's settings deny file, web and board tools.
@@ -95,14 +95,14 @@ finished, copied its closing message into the other agent's chat and wrote
 
 ## Stage 3 (planned)
 
-Built in four steps, each usable on its own and checked by Barry before the
+Built in four steps, each usable on its own and checked by the user before the
 next.
 
 - **3a. Who acts next.** An agent ends its closing message with one line,
-  `Next: Claude`, `Next: Codex` or `Next: Barry`, optionally followed by a
+  `Next: Claude`, `Next: Codex` or `Next: User`, optionally followed by a
   reason. The board parses that line when it reads the ledger, so the hooks
   and couriers do not change. The Next turn box highlights the declared
-  agent; `Next: Barry` highlights neither Send button and shows "Your call".
+  agent; `Next: User` highlights neither Send button and shows "Your call".
   With no declaration, the board suggests the other agent, as now. The
   convention lives in the shared agent policy, so it survives compaction and
   needs no wrapper text.
@@ -119,8 +119,8 @@ next.
   Hold or Cruise. Hold is the brake: it cancels unclaimed prompts and blocks
   sends until released. Cruise is the throttle: when a turn lands that
   declares `Next: Claude` or `Next: Codex`, the board sends the short Continue
-  prompt to that agent itself. It stops after a hand-off count Barry sets,
-  on `Next: Barry` or a missing declaration, on any failed delivery, and at a
+  prompt to that agent itself. It stops after a hand-off count the user sets,
+  on `Next: User` or a missing declaration, on any failed delivery, and at a
   token ceiling from 3c. This rewords the repository's "no automatic agent
-  dispatch" rule: Barry still starts every cruise, and agents still cannot
+  dispatch" rule: the user still starts every cruise, and agents still cannot
   wake each other.

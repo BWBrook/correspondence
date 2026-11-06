@@ -120,7 +120,7 @@ def test_unclaimed_claude_prompt_can_be_cancelled(claude):
     sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
     assert client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).status_code == 409
     cancelled = client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).json()
-    assert cancelled["status"] == "failed" and cancelled["detail"] == "Cancelled by Barry"
+    assert cancelled["status"] == "failed" and cancelled["detail"] == "Cancelled by User"
 
 
 def test_done_command_records_the_outcome_once(claude):
@@ -148,7 +148,7 @@ def test_archive_carries_pins_and_dispatches(tmp_path):
     store.create_project("p", "P")
     store.set_project_agent("p", "Codex", MAIN)
     store.finish_dispatch(store.create_dispatch("p", "Codex", "x")["id"], True, "")
-    token = store.list_projects("Barry")[0]["state_token"]
+    token = store.list_projects("User")[0]["state_token"]
     archived = store.archive_project("p", token)
     with store.connect() as con:
         assert con.execute("SELECT project_id FROM project_agents").fetchone()[0] == archived["id"]

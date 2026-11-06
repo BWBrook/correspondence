@@ -68,12 +68,13 @@ def flags(text: str, terms: list[str]) -> list[str]:
     return [t for t in terms if re.search(rf"\b{re.escape(t)}", text, re.IGNORECASE)]
 
 
-def render(thread: dict, msgs: list[dict], policy: dict, preview: bool = False) -> tuple[str, list[str]]:
+def render(thread: dict, msgs: list[dict], policy: dict, preview: bool = False, user: str = "User") -> tuple[str, list[str]]:
     lines = [f"# {thread['title']}", "", f"Board discussion {thread['id']}, status {thread['status']}.", ""]
     problems = []
     for m in msgs:
         model = f" ({m['model']})" if m.get("model") else ""
-        lines += [f"## Message {m['id']} · {m['author']}{model} · {m['kind']}", "", f"Time: {m['created_at']}"]
+        author = user if m["author"] == "User" else m["author"]
+        lines += [f"## Message {m['id']} · {author}{model} · {m['kind']}", "", f"Time: {m['created_at']}"]
         if m.get("parent_id"):
             lines.append(f"Reply to: {m['parent_id']}")
         lines.append("")
@@ -98,10 +99,11 @@ def main() -> None:
     policy = load_policy(args.policy)
     out_dir = args.preview or args.policy.parent
     threads = sorted(get(args.base, f"/api/threads?project_id={policy['project']}&limit=1000"), key=lambda t: t["id"])
+    user = get(args.base, "/api/health")["user_name"]
     rendered, problems = {}, []
     for thread in threads:
         meta, msgs = fetch_thread(args.base, thread["id"])
-        rendered[f"thread-{meta['id']:04d}.md"], found = render(meta, msgs, policy, bool(args.preview))
+        rendered[f"thread-{meta['id']:04d}.md"], found = render(meta, msgs, policy, bool(args.preview), user)
         problems += found
         thread["exported_through"] = msgs[-1]["id"] if msgs else None
     if problems and not args.preview:

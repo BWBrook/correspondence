@@ -257,8 +257,8 @@ def test_compact_project_list_and_self_reported_model(tmp_path):
                 assert fallback.structuredContent["model"] == "Configured"
                 assert (await session.call_tool("post_message", {"thread_id": thread["id"], "body": "Blank", "model": ""})).isError
                 created = await session.call_tool("create_thread", {"project_id": "demo", "title": "T2", "body": "B", "model": "Opus 5.5"})
-                assert board.get_message("Barry", created.structuredContent["first_message_id"])["message"]["model"] == "Opus 5.5"
+                assert board.get_message("User", created.structuredContent["first_message_id"])["message"]["model"] == "Opus 5.5"
                 status = await session.call_tool("set_thread_status", {"thread_id": thread["id"], "status": "resolved", "model": "Opus 5.5"})
-                assert board.get_message("Barry", status.structuredContent["last_message_id"])["message"]["model"] == "Opus 5.5"
+                assert board.get_message("User", status.structuredContent["last_message_id"])["message"]["model"] == "Opus 5.5"
 
     asyncio.run(exercise())

@@ -1,4 +1,4 @@
-"""Loopback web application. Browser writes always belong to Barry."""
+"""Loopback web application. Browser writes always belong to the human participant, stored as ``User``."""
 from __future__ import annotations
 
 import os
@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from .runtime import access_log_config, board_info
-from .store import Conflict, NotFound, Store
+from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_codex, messenger_listening, remote_claude_session
 from .turns import answered_at, latest_per_project, project_sessions, project_turns, read_turns
 
@@ -104,11 +104,11 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", **board_info("Barry")}
+        return {"status": "ok", **board_info(USER), "user_name": store().user_name()}
 
     @app.get("/api/projects")
     def projects(archived: bool = False):
-        return store().list_projects("Barry", archived=archived)
+        return store().list_projects(USER, archived=archived)
 
     @app.post("/api/projects", status_code=201)
     def create_project(payload: ProjectCreate):
@@ -124,43 +124,43 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/threads")
     def threads(project_id: str | None = None, unread_only: bool = False, limit: int = Query(200, ge=1, le=1000), archived: bool = False):
-        return store().list_threads("Barry", project_id, unread_only, limit, archived=archived)
+        return store().list_threads(USER, project_id, unread_only, limit, archived=archived)
 
     @app.post("/api/threads", status_code=201)
     def create_thread(payload: ThreadCreate):
-        return store().create_thread("Barry", **payload.model_dump())
+        return store().create_thread(USER, **payload.model_dump())
 
     @app.get("/api/threads/{thread_id}")
     def read_thread(thread_id: int, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), max_bytes: int = Query(200_000, ge=1_000, le=10_000_000), mode: str = "oldest", before: int | None = Query(None, ge=1), archived: bool = False):
-        return store().read_thread("Barry", thread_id, after, limit, max_bytes, mode=mode, before=before, archived=archived)
+        return store().read_thread(USER, thread_id, after, limit, max_bytes, mode=mode, before=before, archived=archived)
 
     @app.get("/api/messages/{message_id}")
     def get_message(message_id: int, archived: bool = False):
-        return store().get_message("Barry", message_id, archived=archived)
+        return store().get_message(USER, message_id, archived=archived)
 
     @app.post("/api/threads/{thread_id}/messages", status_code=201)
     def post_message(thread_id: int, payload: MessageCreate):
-        return store().post_message("Barry", thread_id, **payload.model_dump())
+        return store().post_message(USER, thread_id, **payload.model_dump())
 
     @app.post("/api/threads/{thread_id}/read")
     def mark_read(thread_id: int, payload: ReadMarker):
-        return store().mark_read("Barry", thread_id, payload.message_id)
+        return store().mark_read(USER, thread_id, payload.message_id)
 
     @app.post("/api/read-all")
     def mark_all_read(payload: Payload):
-        return store().mark_all_read("Barry")
+        return store().mark_all_read(USER)
 
     @app.post("/api/threads/{thread_id}/status")
     def set_status(thread_id: int, payload: StatusChange):
-        return store().set_thread_status("Barry", thread_id, payload.status)
+        return store().set_thread_status(USER, thread_id, payload.status)
 
     @app.get("/api/search")
     def search(q: str, project_id: str | None = None, limit: int = Query(100, ge=1, le=500), thread_id: int | None = Query(None, ge=1), before: int | None = Query(None, ge=1), archived: bool = False):
-        return store().search_messages("Barry", q, project_id, limit, thread_id=thread_id, before=before, archived=archived)
+        return store().search_messages(USER, q, project_id, limit, thread_id=thread_id, before=before, archived=archived)
 
     @app.get("/api/threads/{thread_id}/export", response_class=PlainTextResponse)
     def export(thread_id: int, archived: bool = False):
-        return PlainTextResponse(store().export_thread("Barry", thread_id, archived=archived), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
+        return PlainTextResponse(store().export_thread(USER, thread_id, archived=archived), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
 
     @app.get("/api/turns")
     def turns(project_id: str | None = None, limit: int = Query(10, ge=1, le=200)):

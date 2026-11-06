@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, post, shortTime, stamp } from "./api";
+import { api, getUserName, post, shortTime, stamp } from "./api";
 
 const AGENTS = ["Claude", "Codex"];
 
@@ -13,7 +13,7 @@ export function continuePrompt(turn, projectName, primed) {
     return `${turn.agent} replied on ${stamp(turn.recorded_at)}, closing with:
 
 ${quoted}`;
-  return `Continue — from Barry, sent through the board.
+  return `Continue — from ${getUserName()}, sent through the board.
 
 ${turn.agent}'s latest turn in ${projectName} ended at ${stamp(turn.recorded_at)}. Its closing message, relayed word for word:
 

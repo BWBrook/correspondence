@@ -37,7 +37,7 @@ def test_inbox_snapshot_scope_and_independent_checkpoint(board):
     a = create(board)
     b = create(board, "beta")
     own = board.post_message("Claude", a, "Own message")
-    reply = board.post_message("Barry", a, "é" * 400)
+    reply = board.post_message("User", a, "é" * 400)
     first = board.inbox("Claude", limit=2)
     assert ids(first["items"]) == [1, 2]
     assert first["total"] == 4 and first["has_more"] and first["through"] == reply["id"]
@@ -82,7 +82,7 @@ def test_updates_count_byte_pages_and_oversized_utf8(board):
     for i in range(250):
         expected.append(board.post_message("Codex", a, f"{i} " + "é" * 180)["id"])
         if i % 20 == 0:
-            board.post_message("Barry", b, "Interleaved gap")
+            board.post_message("User", b, "Interleaved gap")
     through = board.inbox("Claude", limit=1)["through"]
     count_page = board.read_updates("Claude", a, limit=7)
     assert ids(count_page["messages"]) == expected[:7] and count_page["has_more"]
@@ -99,7 +99,7 @@ def test_updates_count_byte_pages_and_oversized_utf8(board):
             break
     assert collected == expected and after == through
     large = board.post_message("Codex", a, "🦉" * 1000)
-    trailing = board.post_message("Barry", a, "Small after oversized")
+    trailing = board.post_message("User", a, "Small after oversized")
     page = board.read_updates("Claude", a, after=through, max_bytes=1000)
     assert ids(page["messages"]) == [large["id"]] and page["oversized"] and page["has_more"]
     assert page["returned_bytes"] == byte_count(page["messages"]) > 4000
@@ -115,7 +115,7 @@ def test_updates_metadata_and_upper_bound_share_transaction_snapshot(board, monk
     def read_then_arrive(con, thread_id, author, **kwargs):
         result = original(con, thread_id, author, **kwargs)
         with ThreadPoolExecutor(max_workers=1) as pool:
-            arrivals.append(pool.submit(board.post_message, "Barry", a, "Concurrent arrival").result())
+            arrivals.append(pool.submit(board.post_message, "User", a, "Concurrent arrival").result())
         return result
 
     monkeypatch.setattr(board, "_thread", read_then_arrive)
@@ -134,7 +134,7 @@ def test_inbox_total_and_page_use_one_snapshot(board, monkeypatch):
     def capture_then_arrive(con, after, through):
         result = bound(con, after, through)
         with ThreadPoolExecutor(max_workers=1) as pool:
-            pool.submit(board.post_message, "Barry", a, "Later").result()
+            pool.submit(board.post_message, "User", a, "Later").result()
         return result
 
     monkeypatch.setattr(board, "_snapshot_bound", capture_then_arrive)
@@ -145,7 +145,7 @@ def test_inbox_total_and_page_use_one_snapshot(board, monkeypatch):
 def test_batch_requested_order_direct_parents_missing_and_budget(board):
     a = create(board)
     parent = board.post_message("Claude", a, "Parent", parent_id=1)
-    child = board.post_message("Barry", a, "Child", parent_id=parent["id"])
+    child = board.post_message("User", a, "Child", parent_id=parent["id"])
     sibling = board.post_message("Codex", a, "Sibling", parent_id=parent["id"])
     result = board.get_messages("Claude", [sibling["id"], 999, child["id"], sibling["id"]], True)
     assert ids(result["messages"]) == [sibling["id"], child["id"], parent["id"]]
@@ -167,9 +167,9 @@ def test_batch_requested_order_direct_parents_missing_and_budget(board):
 def test_body_search_filters_literals_timestamp_and_pagination(board):
     a = create(board, title="needle title only", body="Not a match")
     b = create(board, "beta")
-    target = board.post_message("Barry", a, r"needle 100% thing_under \literal", "evidence")
-    decoy = board.post_message("Barry", a, "needle 1000 thingXunder", "proposal")
-    elsewhere = board.post_message("Barry", b, "needle", "evidence")
+    target = board.post_message("User", a, r"needle 100% thing_under \literal", "evidence")
+    decoy = board.post_message("User", a, "needle 1000 thingXunder", "proposal")
+    elsewhere = board.post_message("User", b, "needle", "evidence")
     newer = board.post_message("Codex", a, "needle", "evidence")
     before = markers(board)
     page = board.search_messages_page("Claude", "needle", limit=2)
@@ -177,7 +177,7 @@ def test_body_search_filters_literals_timestamp_and_pagination(board):
     rest = board.search_messages_page("Claude", "needle", before=page["next_before"], limit=2)
     assert ids(rest["items"]) == [decoy["id"], target["id"]] and not rest["has_more"]
     assert all("body" not in item for item in page["items"])
-    assert ids(board.search_messages_page("Claude", "needle", "alpha", a, "Barry", "evidence")["items"]) == [target["id"]]
+    assert ids(board.search_messages_page("Claude", "needle", "alpha", a, "User", "evidence")["items"]) == [target["id"]]
     assert not board.search_messages_page("Claude", "needle", "beta", a)["items"]
     for literal in ("%", "_", "\\"):
         assert ids(board.search_messages_page("Claude", literal)["items"]) == [target["id"]]
@@ -192,13 +192,13 @@ def test_body_search_filters_literals_timestamp_and_pagination(board):
 
 def test_thread_pages_stable_despite_activity_and_title_search(board):
     threads = [create(board, "alpha" if i % 2 == 0 else "beta", f"Needle {i}") for i in range(7)]
-    board.mark_read("Barry", threads[-1], 7)
+    board.mark_read("User", threads[-1], 7)
     first = board.list_threads_page("Claude", limit=3)
     assert ids(first["items"]) == list(reversed(threads[-3:])) and first["has_more"]
     shared = first["items"][0]
-    assert shared["read_markers"]["Barry"] == 7 and shared["unread_counts"]["Barry"] == 0
+    assert shared["read_markers"]["User"] == 7 and shared["unread_counts"]["User"] == 0
     assert shared["last_author"] == "Codex"
-    board.post_message("Barry", threads[0], "New activity in old thread")
+    board.post_message("User", threads[0], "New activity in old thread")
     create(board, title="Newest thread")
     second = board.list_threads_page("Claude", limit=3, before=first["next_before"])
     third = board.list_threads_page("Claude", limit=3, before=second["next_before"])
@@ -208,9 +208,9 @@ def test_thread_pages_stable_despite_activity_and_title_search(board):
     assert ids(title_hits["items"]) == [7, 5]
     assert ids(board.search_threads("Claude", "needle", "alpha", title_hits["next_before"])["items"]) == [3, 1]
     assert not board.search_threads("Claude", "New activity")["items"]
-    assert 7 not in ids(board.list_threads_page("Barry", unread_only=True)["items"])
+    assert 7 not in ids(board.list_threads_page("User", unread_only=True)["items"])
     assert len(board.list_threads_page("Claude", limit=1000)["items"]) == 8
-    assert markers(board) == [("Barry", 7, 7)]
+    assert markers(board) == [("User", 7, 7)]
 
 
 @pytest.mark.parametrize("kwargs", [{"after": -1}, {"after": True}, {"after": 2}, {"through": 2},
