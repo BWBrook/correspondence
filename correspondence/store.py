@@ -528,6 +528,15 @@ class Store:
                 WHERE d.target=? AND d.machine IS ? AND d.status='queued' AND d.claimed_at IS NULL
                 ORDER BY d.id""", (target, machine))]
 
+    def agent_posts(self, project_id, agent, after, through):
+        """An agent's posts in a project's active discussions with ``after < time <= through``, to the second."""
+        authors = (agent, LEGACY_AUTHORS.get(agent, agent))
+        with self.connect() as con:
+            return [dict(row) for row in con.execute(
+                """SELECT m.id, m.thread_id, t.title FROM messages m JOIN threads t ON t.id=m.thread_id
+                WHERE t.project_id=? AND m.author IN (?,?) AND substr(m.created_at,1,19)>? AND substr(m.created_at,1,19)<=?
+                ORDER BY m.id""", (project_id, *authors, after, through))]
+
     def primed_sessions(self, session_ids):
         """The sessions among these that have had a board prompt delivered."""
         ids = [s for s in session_ids if s]

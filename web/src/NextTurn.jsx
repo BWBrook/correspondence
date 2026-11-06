@@ -104,13 +104,16 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
   const [edited, setEdited] = useState(false);
   const [sending, setSending] = useState(null);
   const [error, setError] = useState("");
-  const suggested = lastTurn
+  const other = lastTurn
     ? AGENTS.find((agent) => agent !== lastTurn.agent)
     : null;
+  const declared = lastTurn?.next?.agent;
+  const suggested = declared === "User" ? null : declared || other;
+  const recipient = suggested || other;
   const defaultText = continuePrompt(
     lastTurn,
     projectName,
-    Boolean(suggested && agents.primed?.[suggested]),
+    Boolean(recipient && agents.primed?.[recipient]),
   );
   useEffect(() => {
     if (!edited) setText(defaultText);
@@ -190,8 +193,15 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
           {lastTurn
             ? `Last: ${lastTurn.agent}, ${shortTime(lastTurn.recorded_at)}`
             : "No turns yet"}
+          {declared && declared !== "User" && ` · asks for ${declared}`}
         </span>
       </header>
+      {declared === "User" && (
+        <p className="your-call" role="status">
+          Your call: {lastTurn.agent} handed this to you
+          {lastTurn.next.reason ? ` (${lastTurn.next.reason})` : ""}.
+        </p>
+      )}
       <textarea
         value={text}
         rows={8}

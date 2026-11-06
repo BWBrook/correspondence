@@ -4,11 +4,20 @@ The board shows each agent's closing messages as recorded. A turn is ``main``
 when it comes from the project's pinned session for that agent, ``other`` when
 the agent has a pinned session and this is a different one (an advisor or an
 automation), and unpinned otherwise. Automation heartbeats are flagged.
+
+An agent declares who acts next by ending its closing message with a line
+``Next: Claude``, ``Next: Codex`` or ``Next: User`` (the user's name also
+works), optionally followed by a reason. Each turn also lists the discussions
+in its project that the same agent posted to since that session's previous
+turn.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+
+NEXT_LINE = re.compile(r"^next\s*:\s*(\w+)\s*(?:[-–—:,.;(]\s*)?(.*?)\)?$", re.IGNORECASE)
 
 FIELDS = ("recorded_at", "agent", "project", "session_id", "turn_id", "model", "message", "machine")
 
@@ -33,24 +42,56 @@ def read_turns(directory: Path) -> list[dict]:
     return turns
 
 
-def annotate(turn: dict, pins: dict) -> dict:
+def declared_next(message: str | None, user_name: str = "User") -> dict | None:
+    """The ``Next:`` declaration on a closing message's last line, if any."""
+    lines = [line.strip() for line in (message or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    match = NEXT_LINE.match(re.sub(r"[*_`>]", "", lines[-1]).strip())
+    if not match:
+        return None
+    names = {"claude": "Claude", "codex": "Codex", "user": "User", user_name.lower(): "User"}
+    agent = names.get(match.group(1).lower())
+    return {"agent": agent, "reason": match.group(2).strip() or None} if agent else None
+
+
+def annotate(turn: dict, pins: dict, user_name: str = "User") -> dict:
     pinned = pins.get(turn["project"], {}).get(turn["agent"])
     role = None if pinned is None else "main" if pinned == turn["session_id"] else "other"
     automation = (turn["message"] or "").lstrip().startswith("<heartbeat>")
-    return {**turn, "role": role, "automation": automation}
+    return {**turn, "role": role, "automation": automation, "next": declared_next(turn["message"], user_name)}
+
+
+def link_discussions(turns: list[dict], history: list[dict], posts) -> list[dict]:
+    """Add the discussions each turn's agent posted to since its session's previous turn.
+
+    ``history`` is the whole ledger, newest first; ``posts(project, agent,
+    after, through)`` returns that agent's posts in the window, compared to
+    the second. A session's first recorded turn has no window.
+    """
+    for turn in turns:
+        previous = next((t for t in history if t["session_id"] == turn["session_id"] and t["project"] == turn["project"]
+                         and t["recorded_at"][:19] < turn["recorded_at"][:19]), None)
+        found = posts(turn["project"], turn["agent"], previous["recorded_at"][:19], turn["recorded_at"][:19]) if previous else []
+        threads = {}
+        for post in found:
+            entry = threads.setdefault(post["thread_id"], {"thread_id": post["thread_id"], "title": post["title"], "message_ids": []})
+            entry["message_ids"].append(post["id"])
+        turn["discussions"] = list(threads.values())
+    return turns
 
 
 def is_current(turn: dict) -> bool:
     return turn["role"] != "other" and not turn["automation"]
 
 
-def project_turns(directory: Path, project_id: str, limit: int, pins: dict) -> list[dict]:
-    return [annotate(t, pins) for t in read_turns(directory) if t["project"] == project_id][:limit]
+def project_turns(turns: list[dict], project_id: str, limit: int, pins: dict, user_name: str = "User") -> list[dict]:
+    return [annotate(t, pins, user_name) for t in turns if t["project"] == project_id][:limit]
 
 
-def latest_per_project(directory: Path, pins: dict) -> list[dict]:
+def latest_per_project(turns: list[dict], pins: dict, user_name: str = "User") -> list[dict]:
     latest = {}
-    for turn in map(lambda t: annotate(t, pins), read_turns(directory)):
+    for turn in (annotate(t, pins, user_name) for t in turns):
         if is_current(turn):
             latest.setdefault(turn["project"], turn)
     return list(latest.values())

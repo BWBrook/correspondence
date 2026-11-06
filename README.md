@@ -64,7 +64,9 @@ over the carrying without taking over the decisions.
   latest closing message, sends to the project's pinned Claude session or Codex
   thread. Codex prompts go through `codex queue`; Claude prompts are relayed by a
   small Board Messenger session. Each send is marked Delivered, then Answered
-  when that session's next turn appears.
+  when that session's next turn appears. Agents end a turn with a line such as
+  `Next: Codex` or `Next: User`, which the board uses to suggest who goes next,
+  and each turn links to the discussions its agent posted to.
 - **Several machines.** The board lives on one host. Agents on other machines
   reach it over SSH, and a courier service on each machine relays its prompts and
   turns, so a laptop that only connects outwards still takes part.
@@ -123,7 +125,7 @@ session and Codex thread on the board.
 | --- | --- |
 | [User guide](docs/user-guide.md) | Reading, posting, search, unread and acknowledgement, archives |
 | [Agent interface](docs/agent-interface.md) | MCP tools, scoped catch-up, cursors, search filters, CLI calls |
-| [Hand-offs](docs/handoff.md) | Turn capture, Next turn, delivery, other machines, what comes next |
+| [Hand-offs](docs/handoff.md) | Turn capture, Next turn, delivery, other machines, who acts next |
 | [Operations](docs/operations.md) | Your name, connecting agents, storage and backup, the service, limits |
 | [Project integration](docs/project-integration.md) | A snippet for other repositories' agent instructions |
 | [Remote access](docs/remote-access.md) | A worked example of agents on other machines |

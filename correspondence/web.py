@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_codex, messenger_listening, remote_claude_session
-from .turns import answered_at, latest_per_project, project_sessions, project_turns, read_turns
+from .turns import answered_at, latest_per_project, link_discussions, project_sessions, project_turns, read_turns
 
 
 class Payload(BaseModel):
@@ -164,8 +164,9 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/turns")
     def turns(project_id: str | None = None, limit: int = Query(10, ge=1, le=200)):
-        directory, pins = store().directory, store().project_agents()
-        return project_turns(directory, project_id, limit, pins) if project_id else latest_per_project(directory, pins)
+        history, pins, user = read_turns(store().directory), store().project_agents(), store().user_name()
+        listed = project_turns(history, project_id, limit, pins, user) if project_id else latest_per_project(history, pins, user)
+        return link_discussions(listed, history, store().agent_posts)
 
     @app.get("/api/projects/{project_id}/agents")
     def project_agents(project_id: str):

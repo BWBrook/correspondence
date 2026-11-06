@@ -93,22 +93,27 @@ finished, copy its closing message into the other agent's chat and write
      at the remote board. A board connection that fails is retried every
      minute without waking the messenger.
 
-## Stage 3 (planned)
+## Stage 3
 
 Built in four steps, each usable on its own and checked by the user before the
-next.
+next. 3a and 3b are live.
 
 - **3a. Who acts next.** An agent ends its closing message with one line,
-  `Next: Claude`, `Next: Codex` or `Next: User`, optionally followed by a
-  reason. The board parses that line when it reads the ledger, so the hooks
-  and couriers do not change. The Next turn box highlights the declared
-  agent; `Next: User` highlights neither Send button and shows "Your call".
-  With no declaration, the board suggests the other agent, as now. The
-  convention lives in the shared agent policy, so it survives compaction and
-  needs no wrapper text.
-- **3b. Turns link to discussions.** The board lists, under each turn, the
-  discussions in that project that the same agent posted to since its
-  previous turn. This is inferred from post times, so agents do nothing new.
+  `Next: Claude`, `Next: Codex` or `Next: User` (the user's configured name
+  also works), optionally followed by a reason: `Next: Codex — review the
+  diff`. The board parses that line when it reads the ledger, so the hooks and
+  couriers do not change; markdown emphasis and backticks are ignored. Each
+  turn shows a Next tag. The Next turn box highlights the declared agent and
+  shows "asks for Codex"; `Next: User` highlights neither Send button and
+  shows "Your call" with the reason. With no declaration, the board suggests
+  the other agent. The convention lives in the shared agent policy, so it
+  survives compaction and needs no wrapper text.
+- **3b. Turns link to discussions.** Each turn lists the discussions in its
+  project that the same agent posted to since that session's previous turn,
+  compared to the second, with a link to the first such message. A session's
+  first recorded turn has no window and so no links. Posts carry no session,
+  so an advisor session's posts in the same window are attributed to the
+  main session's turn.
 - **3c. Budget display.** The hook and the courier record each turn's token
   use: Claude's from the transcript's per-message `usage`, Codex's from the
   rollout's `token_count`. Codex rollouts also carry the weekly limit's

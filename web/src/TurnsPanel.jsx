@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, shortTime, stamp } from "./api";
+import { api, getUserName, shortTime, stamp } from "./api";
 import { BoardMarkdown } from "./components";
 import { NextTurn } from "./NextTurn";
 
@@ -109,6 +109,14 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
             <header className="message-heading">
               <strong>{turn.agent}</strong>
               {turn.model && <span className="model">{turn.model}</span>}
+              {turn.next && (
+                <span
+                  className={`session-tag next-tag${turn.next.agent === "User" ? " your-call-tag" : ""}`}
+                  title={turn.next.reason || undefined}
+                >
+                  Next: {turn.next.agent === "User" ? getUserName() : turn.next.agent}
+                </span>
+              )}
               {(turn.role === "other" || turn.automation) && (
                 <span className="session-tag">
                   {turn.automation ? "automation" : "other session"}
@@ -131,6 +139,20 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
               </time>
             </header>
             <ClampedBody text={turn.message} />
+            {turn.discussions?.length > 0 && (
+              <p className="turn-discussions">
+                Posted in{" "}
+                {turn.discussions.map((d, i) => (
+                  <React.Fragment key={d.thread_id}>
+                    {i > 0 && " · "}
+                    <a href={`#thread=${d.thread_id}&message=${d.message_ids[0]}`}>
+                      {d.title}
+                    </a>
+                    {d.message_ids.length > 1 && ` (${d.message_ids.length} messages)`}
+                  </React.Fragment>
+                ))}
+              </p>
+            )}
           </div>
         </article>
       ))}
