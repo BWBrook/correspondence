@@ -10,3 +10,6 @@ web/dist/
 work/
 .DS_Store
 *.egg-info/
+
+# Machine-specific messenger settings (board SSH command)
+messenger/.claude/settings.local.json
