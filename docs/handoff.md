@@ -102,8 +102,8 @@ next.
   `Next: Claude`, `Next: Codex` or `Next: Barry`, optionally followed by a
   reason. The board parses that line when it reads the ledger, so the hooks
   and couriers do not change. The Next turn box highlights the declared
-  agent; `Next: Barry` greys both Send buttons' emphasis and shows "Your
-  call". With no declaration, the board suggests the other agent, as now. The
+  agent; `Next: Barry` highlights neither Send button and shows "Your call".
+  With no declaration, the board suggests the other agent, as now. The
   convention lives in the shared agent policy, so it survives compaction and
   needs no wrapper text.
 - **3b. Turns link to discussions.** The board lists, under each turn, the
