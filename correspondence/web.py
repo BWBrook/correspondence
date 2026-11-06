@@ -178,7 +178,9 @@ def create_app(data_dir=None, dist_dir=None):
             live = claude_session(pins["Claude"])
         else:
             live = remote_claude_session(directory, claude_machine, pins["Claude"])
+        primed = store().primed_sessions(pins.values())
         return {"pins": pins, "machines": machines, "sessions": project_sessions(directory, project_id),
+                "primed": {agent: session in primed for agent, session in pins.items()},
                 "claude_live": live, "messenger_listening": messenger_listening(directory, claude_machine),
                 "couriers": {m: courier_online(directory, m) for m in set(machines.values()) if m}}
 

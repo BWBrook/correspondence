@@ -3,12 +3,16 @@ import { api, post, shortTime, stamp } from "./api";
 
 const AGENTS = ["Claude", "Codex"];
 
-export function continuePrompt(turn, projectName) {
+export function continuePrompt(turn, projectName, primed) {
   if (!turn) return "Continue: take your next turn on this project.";
   const quoted = (turn.message || "(no closing message recorded)")
     .split("\n")
     .map((line) => `> ${line}`)
     .join("\n");
+  if (primed)
+    return `${turn.agent} replied on ${stamp(turn.recorded_at)}, closing with:
+
+${quoted}`;
   return `Continue — from Barry, sent through the board.
 
 ${turn.agent}'s latest turn in ${projectName} ended at ${stamp(turn.recorded_at)}. Its closing message, relayed word for word:
@@ -100,7 +104,14 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
   const [edited, setEdited] = useState(false);
   const [sending, setSending] = useState(null);
   const [error, setError] = useState("");
-  const defaultText = continuePrompt(lastTurn, projectName);
+  const suggested = lastTurn
+    ? AGENTS.find((agent) => agent !== lastTurn.agent)
+    : null;
+  const defaultText = continuePrompt(
+    lastTurn,
+    projectName,
+    Boolean(suggested && agents.primed?.[suggested]),
+  );
   useEffect(() => {
     if (!edited) setText(defaultText);
   }, [defaultText, edited]);
@@ -142,9 +153,6 @@ export function NextTurn({ projectId, projectName, lastTurn, onPinsChanged }) {
       setError(e.message);
     }
   }
-  const suggested = lastTurn
-    ? AGENTS.find((agent) => agent !== lastTurn.agent)
-    : null;
   async function send(target) {
     setSending(target);
     setError("");

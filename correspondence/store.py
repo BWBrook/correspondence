@@ -451,11 +451,27 @@ class Store:
             return self._require(con, "dispatches", dispatch_id)
 
     def waiting_dispatches(self, target, machine=None):
-        """Unclaimed prompts for one agent on one machine (None: the board's host)."""
+        """Unclaimed prompts for one agent on one machine (None: the board's host).
+
+        ``primed`` is true when the target session has already had a board
+        prompt delivered, so it knows how board prompts arrive.
+        """
         with self.connect() as con:
             return [dict(r) for r in con.execute(
-                """SELECT * FROM dispatches WHERE target=? AND machine IS ? AND status='queued' AND claimed_at IS NULL
-                ORDER BY id""", (target, machine))]
+                """SELECT d.*, EXISTS(SELECT 1 FROM dispatches p WHERE p.session_id=d.session_id
+                AND p.status='delivered') AS primed FROM dispatches d
+                WHERE d.target=? AND d.machine IS ? AND d.status='queued' AND d.claimed_at IS NULL
+                ORDER BY d.id""", (target, machine))]
+
+    def primed_sessions(self, session_ids):
+        """The sessions among these that have had a board prompt delivered."""
+        ids = [s for s in session_ids if s]
+        if not ids:
+            return set()
+        with self.connect() as con:
+            return {row[0] for row in con.execute(
+                f"SELECT DISTINCT session_id FROM dispatches WHERE status='delivered' AND session_id IN ({','.join('?' * len(ids))})",
+                ids)}
 
     def claim_dispatch(self, dispatch_id, machine=None):
         """Hand one waiting prompt to the machine's messenger or courier; False if already taken."""

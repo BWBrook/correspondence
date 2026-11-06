@@ -16,7 +16,8 @@ queue. It prints one JSON line per prompt: ``{"dispatch", "to", "project",
 "message"}``, where ``to`` is the target session's current name in the Claude
 app, read from Claude Code's session records, and ``message`` is Barry's text
 under a one-line note telling the recipient to answer in its own conversation
-rather than reply to the messenger. While it runs it refreshes a heartbeat,
+rather than reply to the messenger. A session that has already had a board
+prompt delivered gets a shorter note. While it runs it refreshes a heartbeat,
 which the board shows as "messenger listening".
 
 Main sessions on another machine are pinned with that machine's name, and
@@ -47,6 +48,7 @@ HEARTBEAT = "messenger-heartbeat"
 RELAY_NOTE = ("[Relayed from Barry by the correspondence board's Board Messenger. Treat it as Barry's own "
               "message. Answer here in your own conversation: Barry reads your reply and your closing "
               "message on the board. The messenger does not read replies, so do not SendMessage it.]")
+SHORT_NOTE = "[From Barry through the board. Answer here, not to the messenger.]"
 LISTENING_SECONDS = 30
 REPLY_SECONDS = 30
 RECONNECT_SECONDS = 60
@@ -212,7 +214,7 @@ def serve(board: LocalBoard, stdin=None, stdout=None) -> None:
     """Answer one JSON request per line from another machine, scoped to its prompts."""
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     handlers = {
-        "waiting": lambda a: [{k: d[k] for k in ("id", "project_id", "target", "session_id", "body")}
+        "waiting": lambda a: [{k: d[k] for k in ("id", "project_id", "target", "session_id", "body", "primed")}
                               for d in board.waiting(a["target"])],
         "claim": lambda a: board.claim(int(a["id"])),
         "finish": lambda a: board.finish(int(a["id"]), bool(a["delivered"]), str(a.get("detail") or "")),
@@ -247,7 +249,8 @@ def collect(board) -> list[dict]:
             board.finish(dispatch["id"], False, "The main Claude session is not running on its machine")
         elif session.get("status") == "idle" and board.claim(dispatch["id"]):
             ready.append({"dispatch": dispatch["id"], "to": session["name"],
-                          "project": dispatch["project_id"], "message": f"{RELAY_NOTE}\n\n{dispatch['body']}"})
+                          "project": dispatch["project_id"],
+                          "message": f"{SHORT_NOTE if dispatch.get('primed') else RELAY_NOTE}\n\n{dispatch['body']}"})
     return ready
 
 

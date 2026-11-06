@@ -40,7 +40,10 @@ finished, copied its closing message into the other agent's chat and wrote
    Other sessions in the same folder, such as read-only advisors or scheduled
    automations, still log turns, but they are greyed and are never woken.
 4. **Next turn.** The composer is prefilled with a Continue prompt that quotes
-   the latest closing message, and Barry edits it to steer. The board records
+   the latest closing message, and Barry edits it to steer. The first prompt
+   to a session explains where it comes from. Once a session has had a board
+   prompt delivered, later ones say only "Claude replied on <time>, closing
+   with:" and the quote, and the messenger's relay note shrinks to one line. The board records
    each send and later marks it Answered when that session's next turn appears.
 5. **Delivery.**
    - Codex: `codex queue --thread <thread> --message <text>`. The Codex desktop

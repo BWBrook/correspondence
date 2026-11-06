@@ -189,3 +189,25 @@ def test_pins_on_another_machine_wait_for_its_courier(setup, monkeypatch):
     agents = client.get("/api/projects/p/agents").json()
     assert agents["couriers"] == {"wsl": True} and agents["messenger_listening"] is True
     assert agents["claude_live"] == {"name": "Extinction Vortex", "status": "idle"}
+
+
+def test_a_session_gets_the_full_relay_note_only_until_one_prompt_is_delivered(claude, capsys):
+    from correspondence.dispatch import RELAY_NOTE, SHORT_NOTE, LocalBoard, serve, wait
+    client, tmp_path = claude
+    store = Store(tmp_path)
+    notes = []
+    for _ in range(2):
+        assert client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).status_code == 201
+        assert client.get("/api/projects/p/agents").json()["primed"] == {"Claude": bool(notes)}
+        wait(LocalBoard(store), poll=0.01)
+        event = json.loads(capsys.readouterr().out)
+        notes.append(event["message"].split("\n\n", 1)[0])
+        store.finish_dispatch(event["dispatch"], True, "")
+        with store.connect(write=True) as con:
+            con.execute("UPDATE dispatches SET delivered_at='2026-01-01T00:00:00+00:00' WHERE status='delivered'")
+    assert notes == [RELAY_NOTE, SHORT_NOTE]
+    client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS)
+    (tmp_path / "in.jsonl").write_text('{"op": "waiting", "target": "Claude"}\n')
+    with open(tmp_path / "in.jsonl") as stdin, open(tmp_path / "out.jsonl", "w") as stdout:
+        serve(LocalBoard(store), stdin, stdout)
+    assert json.loads((tmp_path / "out.jsonl").read_text())["result"][0]["primed"]
