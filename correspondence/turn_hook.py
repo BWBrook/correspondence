@@ -102,10 +102,19 @@ def append_lines(lines: list[str], directory: Path, name: str = "turns.jsonl") -
 def forward(entry: dict, directory: Path, command: str) -> None:
     """Spool the turn, then send the whole spool; keep it if sending fails."""
     append(entry, directory, "turns-spool.jsonl")
+    flush(directory, command)
+
+
+def flush(directory: Path, command: str) -> None:
+    """Send the whole spool to the forward command; clear it only on success."""
     spool = directory / "turns-spool.jsonl"
+    if not spool.exists():
+        return
     with open(spool, "r+", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         pending = handle.read()
+        if not pending.strip():
+            return
         result = subprocess.run(shlex.split(command), input=pending, text=True, capture_output=True,
                                 timeout=20)
         if result.returncode != 0:
