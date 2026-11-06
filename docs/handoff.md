@@ -27,6 +27,16 @@ finished, copied its closing message into the other agent's chat and wrote
    spools each line locally and sends the spool over SSH, clearing it only on
    success, so turns recorded while the board's host is unreachable arrive
    with the next one. The board ignores exact duplicate lines.
+
+   The Codex Windows app runs no hooks, even approved ones. For threads in
+   that app, `correspondence-codex-watch --thread <project>=<thread>` runs as
+   a user service instead. It follows each thread's rollout file in
+   `$CODEX_HOME/sessions/` and turns every `task_complete` event into the
+   record the hook would have written, with the model taken from the turn's
+   `turn_context`. Its records go through the same spool and `--forward`
+   command. A thread seen for the first time starts at the end of its file;
+   read positions are kept in `codex-watch.json` beside the spool. Failed sends
+   are retried once a minute.
 2. **Turns panel.** When no discussion is open, the reading pane shows the
    latest turn per project, or a project's recent turns.
 3. **Main sessions.** Each project pins one Claude session and one Codex thread.
