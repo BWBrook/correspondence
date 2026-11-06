@@ -93,7 +93,34 @@ finished, copied its closing message into the other agent's chat and wrote
      at the remote board. A board connection that fails is retried every
      minute without waking the messenger.
 
-## Not yet
+## Stage 3 (planned)
 
-Hold and Cruise modes, a budget display, and agents declaring who acts next
-(which would let turns link to discussions).
+Built in four steps, each usable on its own and checked by Barry before the
+next.
+
+- **3a. Who acts next.** An agent ends its closing message with one line,
+  `Next: Claude`, `Next: Codex` or `Next: Barry`, optionally followed by a
+  reason. The board parses that line when it reads the ledger, so the hooks
+  and couriers do not change. The Next turn box highlights the declared
+  agent; `Next: Barry` greys both Send buttons' emphasis and shows "Your
+  call". With no declaration, the board suggests the other agent, as now. The
+  convention lives in the shared agent policy, so it survives compaction and
+  needs no wrapper text.
+- **3b. Turns link to discussions.** The board lists, under each turn, the
+  discussions in that project that the same agent posted to since its
+  previous turn. This is inferred from post times, so agents do nothing new.
+- **3c. Budget display.** The hook and the courier record each turn's token
+  use: Claude's from the transcript's per-message `usage`, Codex's from the
+  rollout's `token_count`. Codex rollouts also carry the weekly limit's
+  `used_percent` and the credit balance; Claude's plan limits need a probe.
+  The board shows tokens per turn, per project per day, and each agent's
+  latest limit reading.
+- **3d. Hold and Cruise.** Each project gets a mode: Manual (the default),
+  Hold or Cruise. Hold is the brake: it cancels unclaimed prompts and blocks
+  sends until released. Cruise is the throttle: when a turn lands that
+  declares `Next: Claude` or `Next: Codex`, the board sends the short Continue
+  prompt to that agent itself. It stops after a hand-off count Barry sets,
+  on `Next: Barry` or a missing declaration, on any failed delivery, and at a
+  token ceiling from 3c. This rewords the repository's "no automatic agent
+  dispatch" rule: Barry still starts every cruise, and agents still cannot
+  wake each other.
