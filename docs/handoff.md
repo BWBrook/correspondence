@@ -22,6 +22,11 @@ finished, copied its closing message into the other agent's chat and wrote
 1. **Turn capture.** `correspondence-turn-hook` runs as a `Stop` hook in each
    agent's project settings. It appends the closing message, agent, session and
    time to `turns.jsonl` in the board's data directory. It never blocks a turn.
+   On another machine (the `wsl` track), the hook runs with `--machine` and
+   `--forward "ssh <board host> …/correspondence-turn-hook --append"`. It
+   spools each line locally and sends the spool over SSH, clearing it only on
+   success, so turns recorded while the board's host is unreachable arrive
+   with the next one. The board ignores exact duplicate lines.
 2. **Turns panel.** When no discussion is open, the reading pane shows the
    latest turn per project, or a project's recent turns.
 3. **Main sessions.** Each project pins one Claude session and one Codex thread.

@@ -48,3 +48,40 @@ def test_bad_input_never_fails_the_turn(tmp_path):
     assert result.returncode == 0 and result.stdout == ""
     assert not ledger.exists()
     assert "JSONDecodeError" in (tmp_path / "turn-hook-errors.log").read_text()
+
+
+def run_forward(tmp_path, forward_cmd, message):
+    local, env = tmp_path / "local", {"PATH": "/usr/bin:/bin"}
+    payload = {"session_id": "s", "turn_id": "t", "last_assistant_message": message}
+    return subprocess.run(
+        [sys.executable, "-m", "correspondence.turn_hook", "--agent", "Codex", "--project", "p", "--machine", "wsl",
+         "--forward", forward_cmd],
+        input=json.dumps(payload), text=True, capture_output=True,
+        env={**env, "CORRESPONDENCE_DATA_DIR": str(local)}), local
+
+
+def test_forward_spools_while_the_board_is_unreachable_then_flushes(tmp_path):
+    board = tmp_path / "board"
+    receiver = f"env CORRESPONDENCE_DATA_DIR={board} {sys.executable} -m correspondence.turn_hook --append"
+    result, local = run_forward(tmp_path, "false", "First, while offline.")
+    assert result.returncode == 0 and not (board / "turns.jsonl").exists()
+    assert "forward failed" in (local / "turn-hook-errors.log").read_text()
+    result, _ = run_forward(tmp_path, receiver, "Second, back online.")
+    assert result.returncode == 0
+    lines = [json.loads(l) for l in (board / "turns.jsonl").read_text().splitlines()]
+    assert [l["message"] for l in lines] == ["First, while offline.", "Second, back online."]
+    assert lines[0]["machine"] == "wsl" and (local / "turns-spool.jsonl").read_text() == ""
+
+
+def test_append_rejects_lines_that_are_not_turns(tmp_path):
+    env = {"PATH": "/usr/bin:/bin", "CORRESPONDENCE_DATA_DIR": str(tmp_path)}
+    bad = subprocess.run([sys.executable, "-m", "correspondence.turn_hook", "--append"], input='{"agent": "Mallory"}\n',
+                         text=True, capture_output=True, env=env)
+    assert bad.returncode != 0 and not (tmp_path / "turns.jsonl").exists()
+
+
+def test_resent_lines_are_shown_once(tmp_path):
+    from correspondence.turns import read_turns
+    line = json.dumps({"recorded_at": "2026-11-06T01:00:00+00:00", "agent": "Codex", "project": "p", "message": "m"})
+    (tmp_path / "turns.jsonl").write_text(f"{line}\n{line}\n")
+    assert len(read_turns(tmp_path)) == 1

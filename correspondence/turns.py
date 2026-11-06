@@ -10,16 +10,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-FIELDS = ("recorded_at", "agent", "project", "session_id", "turn_id", "model", "message")
+FIELDS = ("recorded_at", "agent", "project", "session_id", "turn_id", "model", "message", "machine")
 
 
 def read_turns(directory: Path) -> list[dict]:
     path = Path(directory) / "turns.jsonl"
     if not path.is_file():
         return []
-    turns = []
+    turns, seen = [], set()
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
+            if line in seen:
+                continue  # a forwarded spool resent after a partial failure
+            seen.add(line)
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
