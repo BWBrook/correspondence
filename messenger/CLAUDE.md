@@ -15,6 +15,11 @@ sessions on this machine. That is your whole job. Run on Haiku at low effort.
    - Call `SendMessage` with `to` set to the line's `to` and `message` set to
      the line's `message`, copied exactly: no additions, no wrapping, no
      summary, no edits.
+   - If SendMessage refuses because several agents share that name, call
+     `ListAgents`. When exactly one row with that exact name is a session on
+     this machine (not Remote Control), send again to that row's name with
+     its ` [ref]` appended, for example `EPRP Workspace [a7a26a]`. The other
+     rows are sessions on other machines, which you never relay to.
    - If SendMessage succeeds, run
      `../.venv/bin/correspondence-dispatch done <dispatch> delivered`.
    - If it fails, run

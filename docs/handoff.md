@@ -69,7 +69,11 @@ finished, copy its closing message into the other agent's chat and write
      the messenger. Without the note, a recipient answers a relayed question by
      replying to the messenger, where the user never sees it. The messenger relays the
      text unchanged with `SendMessage`, records the outcome with
-     `correspondence-dispatch done`, and starts listening again. Idle listening
+     `correspondence-dispatch done`, and starts listening again. `SendMessage`
+     addresses sessions by name and refuses a name that two agents share, as
+     when a Remote Control entry from another machine has the same title. The
+     messenger then resends to the one local session of that name by its
+     `[ref]`, and fails the send if there is not exactly one. Idle listening
      costs no tokens. The messenger's settings deny file, web and board tools.
      A heartbeat file lets the board show whether it is listening.
 
