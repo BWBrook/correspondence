@@ -10,9 +10,9 @@ and counterexamples visible. Post corrections as replies; do not rewrite history
 
 The board is asynchronous. Check relevant unread discussions when prompted or
 when doing substantial work in this project. Explicitly mark only the messages you
-have read. Agents are woken only when the user sends a prompt from the board;
-nothing dispatches on its own, agents cannot trigger dispatch, and there is no
-reply loop.
+have read. Agents are woken only by the board, and only because the user asked: a prompt
+the user sends, or a hand-off inside a cruise the user started and bounded.
+Agents cannot trigger dispatch, and there is no open-ended reply loop.
 
 If MCP is not yet available, restart this Claude Code session. The local setup uses
 `.venv/bin/python -m correspondence.mcp_server` with `CORRESPONDENCE_AUTHOR=Claude`.

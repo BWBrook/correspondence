@@ -19,6 +19,9 @@ LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
+MODES = ("manual", "hold", "cruise")
+CRUISE_HOPS = (1, 50)
+CRUISE_CEILING = (10, 100)
 MACHINE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 
 
@@ -167,6 +170,15 @@ class Store:
                 if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise sqlite3.IntegrityError("Integrity failure during user migration")
                 con.execute("PRAGMA user_version=8")
+            if version < 9:
+                con.execute("""CREATE TABLE IF NOT EXISTS project_modes (
+                    project_id TEXT PRIMARY KEY REFERENCES projects(id),
+                    mode TEXT NOT NULL CHECK(mode IN ('manual','hold','cruise')),
+                    hops_left INTEGER, ceiling INTEGER, started_at TEXT,
+                    stopped_reason TEXT, stopped_at TEXT, updated_at TEXT NOT NULL)""")
+                if "origin" not in {row[1] for row in con.execute("PRAGMA table_info(dispatches)")}:
+                    con.execute("ALTER TABLE dispatches ADD COLUMN origin TEXT")
+                con.execute("PRAGMA user_version=9")
             con.commit()
         except Exception:
             con.rollback()
@@ -396,6 +408,7 @@ class Store:
         con.execute("UPDATE threads SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("UPDATE project_agents SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("UPDATE dispatches SET project_id=? WHERE project_id=?", (new_id, old_id))
+        con.execute("UPDATE project_modes SET project_id=?, mode='manual', hops_left=NULL WHERE project_id=?", (new_id, old_id))
 
     @staticmethod
     def _project_state(con, project_id, expected_state):
@@ -488,13 +501,21 @@ class Store:
                             (project_id, agent, session_id, now(), machine))
         return self.project_agents(project_id)
 
-    def create_dispatch(self, project_id, target, body):
-        """Record the user's prompt for a project's main agent; refuse a duplicate in flight."""
+    def create_dispatch(self, project_id, target, body, origin=None):
+        """Record a prompt for a project's main agent; refuse one on hold or a duplicate in flight.
+
+        ``origin`` is ``"cruise"`` for a prompt the board sent itself while the
+        project cruises, and None for one the user sent.
+        """
         if target not in DISPATCH_TARGETS:
             raise ValueError("Target must be Claude or Codex")
+        if origin not in (None, "cruise"):
+            raise ValueError("Origin must be cruise or unset")
         body = clean_text(body, "Prompt", 50_000)
         with self.connect(write=True) as con:
             self._project(con, project_id)
+            if self._mode(con, project_id)["mode"] == "hold":
+                raise Conflict("This project is on hold; release it to send prompts")
             pin = con.execute("SELECT session_id, machine FROM project_agents WHERE project_id=? AND agent=?", (project_id, target)).fetchone()
             if pin is None:
                 raise Conflict(f"Set this project's main {target} session first")
@@ -502,8 +523,10 @@ class Store:
             if con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND target=?
                     AND (status='queued' OR (status='delivered' AND delivered_at>?))""", (project_id, target, cutoff)).fetchone():
                 raise Conflict(f"A prompt to {target} was just sent; wait a few seconds before sending another")
-            cursor = con.execute("""INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at,machine)
-                VALUES (?,?,?,?,'queued',?,?)""", (project_id, target, pin["session_id"], body, now(), pin["machine"]))
+            cursor = con.execute("""INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at,machine,origin)
+                VALUES (?,?,?,?,'queued',?,?,?)""", (project_id, target, pin["session_id"], body, now(), pin["machine"], origin))
+            if origin == "cruise":
+                con.execute("UPDATE project_modes SET hops_left=hops_left-1, updated_at=? WHERE project_id=?", (now(), project_id))
             return self._require(con, "dispatches", cursor.lastrowid)
 
     def finish_dispatch(self, dispatch_id, delivered, detail, machine=None):
@@ -560,6 +583,70 @@ class Store:
                 raise Conflict("Only a prompt the messenger has not yet picked up can be cancelled")
             con.execute("UPDATE dispatches SET status='failed', detail=? WHERE id=?", (f"Cancelled by {self._user_name(con)}", dispatch_id))
             return self._require(con, "dispatches", dispatch_id)
+
+    @staticmethod
+    def _mode(con, project_id):
+        row = con.execute("SELECT * FROM project_modes WHERE project_id=?", (project_id,)).fetchone()
+        return dict(row) if row else {"project_id": project_id, "mode": "manual", "hops_left": None, "ceiling": None,
+                                      "started_at": None, "stopped_reason": None, "stopped_at": None}
+
+    def project_mode(self, project_id):
+        """Manual (the default), Hold or Cruise, with the cruise budget and why the last cruise stopped."""
+        with self.connect() as con:
+            self._project(con, project_id)
+            return self._mode(con, project_id)
+
+    def set_project_mode(self, project_id, mode, hops=None, ceiling=None, reason=None):
+        """Change a project's mode. Hold cancels its prompts not yet picked up; Cruise sets a fresh budget."""
+        if mode not in MODES:
+            raise ValueError("Mode must be manual, hold or cruise")
+        if mode == "cruise":
+            if not (isinstance(hops, int) and CRUISE_HOPS[0] <= hops <= CRUISE_HOPS[1]):
+                raise ValueError(f"Hand-offs must be {CRUISE_HOPS[0]}–{CRUISE_HOPS[1]}")
+            if not (isinstance(ceiling, int) and CRUISE_CEILING[0] <= ceiling <= CRUISE_CEILING[1]):
+                raise ValueError(f"The limit ceiling must be {CRUISE_CEILING[0]}–{CRUISE_CEILING[1]}%")
+        stamp = now()
+        with self.connect(write=True) as con:
+            self._project(con, project_id)
+            previous = self._mode(con, project_id)
+            if mode == "cruise":
+                pins = {row[0] for row in con.execute("SELECT agent FROM project_agents WHERE project_id=?", (project_id,))}
+                if pins != DISPATCH_TARGETS:
+                    raise Conflict("Choose both main sessions before cruising")
+                values = (mode, hops, ceiling, stamp, None, None)
+            elif previous["mode"] == "cruise":
+                values = (mode, None, None, None, reason or f"Stopped by {self._user_name(con)}", stamp)
+            else:
+                values = (mode, None, None, None, previous["stopped_reason"], previous["stopped_at"])
+            con.execute("""INSERT INTO project_modes(project_id,mode,hops_left,ceiling,started_at,stopped_reason,stopped_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET mode=excluded.mode, hops_left=excluded.hops_left,
+                ceiling=excluded.ceiling, started_at=excluded.started_at, stopped_reason=excluded.stopped_reason,
+                stopped_at=excluded.stopped_at, updated_at=excluded.updated_at""", (project_id, *values, stamp))
+            if mode == "hold":
+                con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: project put on hold'
+                    WHERE project_id=? AND status='queued' AND claimed_at IS NULL""", (project_id,))
+            return self._mode(con, project_id)
+
+    def cruising_projects(self):
+        with self.connect() as con:
+            return [dict(row) for row in con.execute(
+                "SELECT m.*, p.name FROM project_modes m JOIN projects p ON p.id=m.project_id WHERE m.mode='cruise' AND p.archived_at IS NULL")]
+
+    def set_limits(self, agent, reading):
+        """Keep an agent's latest plan-limit reading."""
+        if agent not in DISPATCH_TARGETS:
+            raise ValueError("Agent must be Claude or Codex")
+        text = json.dumps(reading)
+        if len(text) > 4000:
+            raise ValueError("Limit reading is too large")
+        with self.connect(write=True) as con:
+            con.execute("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (f"limits.{agent}", text))
+
+    def limits(self, agent):
+        with self.connect() as con:
+            row = con.execute("SELECT value FROM settings WHERE key=?", (f"limits.{agent}",)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def list_dispatches(self, project_id, limit=10):
         with self.connect() as con:

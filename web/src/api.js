@@ -77,3 +77,10 @@ export function plainExcerpt(markdown) {
     .replace(/\s+/g, " ")
     .trim();
 }
+export function tokens(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+  return String(n);
+}
+export const formatUsage = (u) =>
+  `${tokens(u.input)} new in · ${tokens(u.cached)} cached · ${tokens(u.output)} out`;

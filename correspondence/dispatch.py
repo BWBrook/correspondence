@@ -1,7 +1,7 @@
 """Deliver a prompt the user sent from the board to a project's main agent session.
 
-Dispatch starts only from a browser request; agents have no tool that creates
-one. On the board's host, Codex prompts go straight into the Codex queue for the
+Dispatch starts from a browser request, or from a cruise the user started in
+the browser (see ``cruise``); agents have no tool that creates one. On the board's host, Codex prompts go straight into the Codex queue for the
 pinned thread, which the Codex desktop app picks up and runs. Claude prompts
 wait in the board until the Board Messenger, a Claude session on the same
 machine as the target, collects them::
@@ -9,6 +9,10 @@ machine as the target, collects them::
     correspondence-dispatch wait          # block until prompts are queued, print them, exit
     correspondence-dispatch done 12 delivered
     correspondence-dispatch done 12 failed "No session named Silurian Plants"
+    correspondence-dispatch limits < usage.json   # Claude's plan limits, from the app
+
+After each relay the messenger also passes the Claude app's usage report to
+``limits``, because Claude's plan limits are visible only inside the app.
 
 ``wait`` holds each prompt until its target session is idle, so a board prompt
 starts the next turn instead of landing inside a running one, as with Codex's
@@ -153,6 +157,13 @@ class LocalBoard:
     def pins(self) -> list[dict]:
         return self.store.machine_pins(self.machine)
 
+    def report_limits(self, report: dict) -> dict:
+        from .usage import claude_limits
+
+        reading = claude_limits(report)
+        self.store.set_limits("Claude", reading)
+        return reading
+
     def report_sessions(self, sessions: dict) -> None:
         path = _sessions_report(self.store.directory, self.machine)
         temporary = path.with_suffix(".tmp")
@@ -210,6 +221,9 @@ class RemoteBoard:
     def report_sessions(self, sessions: dict) -> None:
         self.request("sessions", sessions=sessions)
 
+    def report_limits(self, report: dict) -> dict:
+        return self.request("limits", report=report)
+
 
 def serve(board: LocalBoard, stdin=None, stdout=None) -> None:
     """Answer one JSON request per line from another machine, scoped to its prompts."""
@@ -221,6 +235,7 @@ def serve(board: LocalBoard, stdin=None, stdout=None) -> None:
         "finish": lambda a: board.finish(int(a["id"]), bool(a["delivered"]), str(a.get("detail") or "")),
         "heartbeat": lambda a: board.heartbeat(),
         "pins": lambda a: board.pins(),
+        "limits": lambda a: board.report_limits(dict(a["report"])),
         "sessions": lambda a: board.report_sessions(
             {str(k): {"name": str(v.get("name")), "status": v.get("status")} for k, v in dict(a["sessions"]).items() if v}),
     }
@@ -298,6 +313,7 @@ def main() -> None:
     finished.add_argument("dispatch", type=int)
     finished.add_argument("outcome", choices=["delivered", "failed"])
     finished.add_argument("detail", nargs="?", default="")
+    commands.add_parser("limits", help="record Claude's plan limits from the app's usage report on stdin")
     served = commands.add_parser("serve", help="answer another machine's board requests on stdin")
     served.add_argument("--machine", required=True)
     args = parser.parse_args()
@@ -309,6 +325,14 @@ def main() -> None:
     board = board_from_environment()
     if args.command == "wait":
         wait(board, args.poll)
+    elif args.command == "limits":
+        text = sys.stdin.read()
+        try:
+            report = json.loads(text[text.index("{"):text.rindex("}") + 1])
+            reading = board.report_limits(report)
+        except (ValueError, RuntimeError) as error:
+            sys.exit(f"Limits not recorded: {error}")
+        print("Claude limits: " + ", ".join(f"{w['label']} {w['percent']:g}%" for w in reading["windows"]))
     else:
         status = board.finish(args.dispatch, args.outcome == "delivered", args.detail)
         if status != args.outcome:

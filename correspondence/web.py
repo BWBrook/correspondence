@@ -1,6 +1,8 @@
 """Loopback web application. Browser writes always belong to the human participant, stored as ``User``."""
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -14,7 +16,12 @@ from pydantic import BaseModel, ConfigDict
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_codex, messenger_listening, remote_claude_session
-from .turns import answered_at, latest_per_project, link_discussions, project_sessions, project_turns, read_turns
+from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_per_project, link_discussions,
+                    project_sessions, project_turns, read_turns)
+from . import cruise
+
+CRUISE_SECONDS = 3
+log = logging.getLogger("correspondence.cruise")
 
 
 class Payload(BaseModel):
@@ -66,11 +73,19 @@ class DispatchCreate(Payload):
     body: str
 
 
+class ModeChange(Payload):
+    mode: str
+    hops: int | None = None
+    ceiling: int | None = None
+
+
 def create_app(data_dir=None, dist_dir=None):
     @asynccontextmanager
     async def lifespan(app):
         app.state.store = Store(data_dir)
+        watcher = asyncio.create_task(watch_cruises())
         yield
+        watcher.cancel()
 
     app = FastAPI(title="Correspondence", lifespan=lifespan)
 
@@ -101,6 +116,19 @@ def create_app(data_dir=None, dist_dir=None):
 
     def store():
         return app.state.store
+
+    def run_cruises():
+        if store().cruising_projects():
+            for line in cruise.step(store(), read_turns(store().directory)):
+                log.warning("cruise %s", line)
+
+    async def watch_cruises():
+        while True:
+            await asyncio.sleep(CRUISE_SECONDS)
+            try:
+                await asyncio.to_thread(run_cruises)
+            except Exception:
+                log.exception("cruise round failed")
 
     @app.get("/api/health")
     def health():
@@ -166,7 +194,27 @@ def create_app(data_dir=None, dist_dir=None):
     def turns(project_id: str | None = None, limit: int = Query(10, ge=1, le=200)):
         history, pins, user = read_turns(store().directory), store().project_agents(), store().user_name()
         listed = project_turns(history, project_id, limit, pins, user) if project_id else latest_per_project(history, pins, user)
+        names = {p["id"]: p["name"] for p in store().list_projects(USER)}
+        for turn in listed:
+            turn["continue_prompts"] = continue_prompts(turn, names.get(turn["project"], turn["project"]), user)
         return link_discussions(listed, history, store().agent_posts)
+
+    @app.get("/api/usage")
+    def usage(project_id: str | None = None, days: int = Query(7, ge=1, le=60)):
+        history = read_turns(store().directory)
+        return {"limits": {"Claude": store().limits("Claude"), "Codex": latest_limits(history, "Codex")},
+                "days": daily_usage(history, project_id, days)}
+
+    @app.get("/api/projects/{project_id}/mode")
+    def project_mode(project_id: str):
+        return store().project_mode(project_id)
+
+    @app.post("/api/projects/{project_id}/mode")
+    def set_project_mode(project_id: str, payload: ModeChange):
+        store().set_project_mode(project_id, payload.mode, payload.hops, payload.ceiling)
+        if payload.mode == "cruise":
+            run_cruises()
+        return store().project_mode(project_id)
 
     @app.get("/api/projects/{project_id}/agents")
     def project_agents(project_id: str):

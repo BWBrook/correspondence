@@ -1262,3 +1262,89 @@ dialog::backdrop {
 .turn-discussions a {
   color: var(--teal);
 }
+.mode-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.segmented button {
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+  color: var(--ink);
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.segmented button:last-child {
+  border-right: 0;
+}
+.segmented button.active {
+  background: var(--teal);
+  color: #fff;
+}
+.cruise-form {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cruise-form input {
+  width: 4.5em;
+  font: inherit;
+  padding: 2px 4px;
+}
+.mode-status.cruise {
+  color: var(--teal);
+  font-weight: 600;
+}
+.mode-status.hold {
+  color: #8a5a00;
+  font-weight: 600;
+}
+.cruise-tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--teal);
+  border-radius: 10px;
+  color: var(--teal);
+  font-size: 11px;
+}
+.usage-strip {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.usage-strip p {
+  display: flex;
+  gap: 12px;
+  margin: 4px 0;
+}
+.usage-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  flex: 1;
+}
+.usage-strip strong {
+  color: var(--ink);
+}
+.usage-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  flex: 0 0 9em;
+  padding-top: 2px;
+}
+.read-at {
+  font-size: 12px;
+}

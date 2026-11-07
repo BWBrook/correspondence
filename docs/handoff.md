@@ -7,10 +7,10 @@ finished, copy its closing message into the other agent's chat and write
 
 ## Principles
 
-- **The user holds the throttle and the brake.** A prompt reaches an agent only
-  when the user presses Send in the browser. Agents have no tool that wakes another
-  agent, and nothing runs on a timer. Faster modes, if they come, will be board
-  settings that the user controls, never decisions agents make.
+- **The user holds the throttle and the brake.** A prompt reaches an agent when
+  the user presses Send in the browser, or within a cruise the user started and
+  bounded. Hold stops everything. Agents have no tool that wakes another agent:
+  they only say who should go next.
 - **Show, don't summarise.** The board shows each agent's closing message as
   written. It adds no model calls of its own, and so no third opinion.
 - **Plain substrates.** Turns are lines in a JSONL file and dispatches are rows
@@ -107,7 +107,7 @@ finished, copy its closing message into the other agent's chat and write
 ## Stage 3
 
 Built in four steps, each usable on its own and checked by the user before the
-next. 3a and 3b are live.
+next. All four are live.
 
 - **3a. Who acts next.** An agent ends its closing message with one line,
   `Next: Claude`, `Next: Codex` or `Next: User` (the user's configured name
@@ -125,18 +125,33 @@ next. 3a and 3b are live.
   first recorded turn has no window and so no links. Posts carry no session,
   so an advisor session's posts in the same window are attributed to the
   main session's turn.
-- **3c. Budget display.** The hook and the courier record each turn's token
-  use: Claude's from the transcript's per-message `usage`, Codex's from the
-  rollout's `token_count`. Codex rollouts also carry the weekly limit's
-  `used_percent` and the credit balance; Claude's plan limits need a probe.
-  The board shows tokens per turn, per project per day, and each agent's
-  latest limit reading.
-- **3d. Hold and Cruise.** Each project gets a mode: Manual (the default),
-  Hold or Cruise. Hold is the brake: it cancels unclaimed prompts and blocks
-  sends until released. Cruise is the throttle: when a turn lands that
-  declares `Next: Claude` or `Next: Codex`, the board sends the short Continue
-  prompt to that agent itself. It stops after a hand-off count the user sets,
-  on `Next: User` or a missing declaration, on any failed delivery, and at a
-  token ceiling from 3c. This rewords the repository's "no automatic agent
-  dispatch" rule: the user still starts every cruise, and agents still cannot
-  wake each other.
+- **3c. Budget display.** The turn hook and the courier record each turn's
+  token use as new input, cached input and output: Claude's from the
+  transcript's per-message `usage` since the turn's prompt, Codex's as the
+  change in the rollout's cumulative `token_count` across the turn. Subagents
+  and delegated jobs with their own transcripts are not counted. Codex turns
+  also carry the latest limit reading from the rollout (the weekly window's
+  percentage and the credit balance). Claude's plan limits are visible only
+  inside the Claude app, so after each relay the Board Messenger calls the
+  app's read-only usage tool and passes the report to
+  `correspondence-dispatch limits`, which keeps the latest reading on the board.
+  Each turn shows its output tokens (hover for the rest); the turns view shows
+  the latest plan limits for both agents and today's tokens per agent, for one
+  project or all of them.
+- **3d. Hold and Cruise.** Each project has a mode, chosen in its Next turn box.
+  - **Manual** (the default): prompts go only when the user presses Send.
+  - **Hold** cancels the project's prompts that no messenger or courier has
+    picked up and refuses new sends until the user releases it.
+  - **Cruise** takes a number of hand-offs (1–50) and a ceiling (10–100% of
+    any plan limit). Every few seconds the board checks each cruising
+    project: when the latest turn from a main session declares
+    `Next: Claude` or `Next: Codex` and nothing has been sent since, the board
+    sends that turn's Continue prompt to the named agent, as Send would, and
+    marks it `cruise` in the send list. If the latest turn already names an
+    agent when the cruise starts, the first hand-off goes at once. A cruise
+    returns the project to Manual, showing why, when the hand-offs are used
+    up; when a turn declares `Next: User`, declares nothing, or names its own
+    agent; when a prompt sent during the cruise fails; when any plan-limit
+    reading reaches the ceiling; or when a main session is unpinned. The user
+    can stop it at any time with Manual or Hold. Turns from advisor sessions
+    never drive a cruise.

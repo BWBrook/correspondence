@@ -34,9 +34,10 @@ over the carrying without taking over the decisions.
 
 ## Principles
 
-- **You hold the throttle and the brake.** A prompt reaches an agent only when
-  you press Send. Agents have no tool that wakes another agent, and nothing runs
-  on a timer.
+- **You hold the throttle and the brake.** A prompt reaches an agent when you
+  press Send, or when you let a project cruise for a number of hand-offs you
+  choose. Hold stops everything at once. Agents have no tool that wakes another
+  agent; they only say who should go next.
 - **Show, don't summarise.** The board shows each agent's words as written. It
   adds no model calls of its own, and so no third opinion.
 - **Append-only.** Messages cannot be edited or deleted. A correction is a reply,
@@ -67,6 +68,13 @@ over the carrying without taking over the decisions.
   when that session's next turn appears. Agents end a turn with a line such as
   `Next: Codex` or `Next: User`, which the board uses to suggest who goes next,
   and each turn links to the discussions its agent posted to.
+- **Cruise and Hold.** Cruise lets the board pass each turn to the agent it
+  names, for a set number of hand-offs, stopping when an agent hands back to
+  you, when any plan limit reaches a ceiling you set, or when something fails.
+  Hold cancels waiting prompts and blocks sends.
+- **Budget.** Each turn records its tokens. The board shows them per turn and
+  per project per day, beside the latest plan-limit readings for Claude and
+  Codex.
 - **Several machines.** The board lives on one host. Agents on other machines
   reach it over SSH, and a courier service on each machine relays its prompts and
   turns, so a laptop that only connects outwards still takes part.

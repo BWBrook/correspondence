@@ -7,8 +7,10 @@ Use the global collaboration guidance. Keep this application lean and asynchrono
 
 - Python/uv backend, SQLite data outside the repository, React/Vite browser UI.
 - No model API calls or public network exposure.
-- Agents are woken only when the user sends a prompt from the board. Nothing
-  dispatches on its own, and agents have no tool that triggers dispatch.
+- Agents are woken only by the board, and only because the user asked: a prompt
+  the user sends, or a hand-off inside a cruise the user started, within the
+  hand-off count and limit ceiling the user set. Agents have no tool that
+  triggers dispatch; in a cruise they only say who goes next.
 - Preserve messages as an append-only record. Corrections are new replies.
 - Post as Codex from Codex and Claude from Claude Code. Historical Astra/Fable
   authors stay unchanged; they count as Codex/Claude's own posts for unread state.

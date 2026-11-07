@@ -44,6 +44,7 @@ from pathlib import Path
 
 from correspondence.dispatch import RECONNECT_SECONDS, RemoteBoard, claude_session, deliver_codex
 from correspondence.turn_hook import append, closing_from_transcript, data_dir, flush
+from correspondence.usage import codex_turn, feed_codex
 
 STATE = "courier.json"
 
@@ -96,9 +97,11 @@ def scan(path: Path, offset: int, context: dict) -> tuple[list[dict], int]:
         payload = entry.get("payload") or {}
         if entry.get("type") == "turn_context":
             context.update(model=payload.get("model"), cwd=payload.get("cwd"))
-        elif entry.get("type") == "event_msg" and payload.get("type") == "task_complete":
+        feed_codex(context, entry)
+        if entry.get("type") == "event_msg" and payload.get("type") == "task_complete":
             completed.append({"timestamp": entry.get("timestamp"), "turn_id": payload.get("turn_id"),
-                              "message": payload.get("last_agent_message"), **context})
+                              "message": payload.get("last_agent_message"), "model": context.get("model"),
+                              "cwd": context.get("cwd"), "usage": codex_turn(context), "limits": context.get("limits")})
     return completed, offset + end
 
 
@@ -114,6 +117,8 @@ def turn_record(turn: dict, thread: str, project: str, machine: str) -> dict:
         "model": turn.get("model"),
         "event": "rollout",
         "message": turn.get("message"),
+        **({"usage": turn["usage"]} if turn.get("usage") else {}),
+        **({"limits": turn["limits"]} if turn.get("limits") else {}),
         "machine": machine,
     }
 
@@ -155,7 +160,7 @@ def watch(home: Path, directory: Path, threads: dict[str, str], machine: str, st
         if same_file and known.get("mtime") == stat.st_mtime and known.get("size") == stat.st_size:
             continue
         if same_file and path.suffix != ".zst" and known.get("offset", 0) <= stat.st_size:
-            context = {key: known.get(key) for key in ("model", "cwd")}
+            context = {key: known.get(key) for key in ("model", "cwd", "total", "baseline", "limits")}
             new, offset = scan(path, known["offset"], context)
             last = new[-1]["timestamp"] if new else known.get("last_at")
         else:

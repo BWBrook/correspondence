@@ -71,6 +71,11 @@ def record(payload: dict, agent: str, project: str, machine: str | None = None) 
         transcript_message, transcript_model = closing_from_transcript(payload.get("transcript_path"))
         message = transcript_message if message is None else message
         model = model or transcript_model
+    usage = limits = None
+    try:
+        usage, limits = turn_usage(payload, agent)
+    except Exception:
+        pass  # usage is extra: never lose the turn over it
     return {
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "agent": agent,
@@ -82,8 +87,24 @@ def record(payload: dict, agent: str, project: str, machine: str | None = None) 
         "event": payload.get("hook_event_name"),
         "stop_hook_active": payload.get("stop_hook_active"),
         "message": message,
+        **({"usage": usage} if usage else {}),
+        **({"limits": limits} if limits else {}),
         **({"machine": machine} if machine else {}),
     }
+
+
+def turn_usage(payload: dict, agent: str) -> tuple[dict | None, dict | None]:
+    """This turn's token use and, for Codex, the latest plan-limit reading."""
+    from .usage import claude_turn_usage, codex_turn_usage
+
+    if agent == "Claude":
+        return claude_turn_usage(payload.get("transcript_path")), None
+    path = payload.get("transcript_path")
+    if not path and payload.get("session_id"):
+        from .courier import codex_home, rollout_path
+
+        path = rollout_path(codex_home(), payload["session_id"])
+    return codex_turn_usage(path, payload.get("turn_id"))
 
 
 def append(entry: dict, directory: Path, name: str = "turns.jsonl") -> None:

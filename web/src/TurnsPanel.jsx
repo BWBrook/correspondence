@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, getUserName, shortTime, stamp } from "./api";
+import { api, formatUsage, getUserName, shortTime, stamp, tokens } from "./api";
 import { BoardMarkdown } from "./components";
 import { NextTurn } from "./NextTurn";
 
@@ -39,6 +39,77 @@ function ClampedBody({ text }) {
         </button>
       )}
     </>
+  );
+}
+
+function LimitReading({ agent, reading }) {
+  if (!reading) return null;
+  const parts = reading.windows.map((w) => `${w.label} ${Math.round(w.percent)}%`);
+  if (reading.credits != null)
+    parts.push(`${Math.round(reading.credits).toLocaleString()} credits`);
+  const resets = reading.windows
+    .filter((w) => w.resets_at)
+    .map((w) => `${w.label} resets ${stamp(w.resets_at)}`)
+    .join("; ");
+  return (
+    <span className="limit-reading" title={resets || undefined}>
+      <strong>{agent}</strong> {parts.join(" · ")}{" "}
+      <span className="read-at">(read {shortTime(reading.read_at)})</span>
+    </span>
+  );
+}
+
+function UsageStrip({ projectId, reload }) {
+  const [usage, setUsage] = useState(null);
+  useEffect(() => {
+    let live = true;
+    const path = projectId ? `/usage?project_id=${encodeURIComponent(projectId)}` : "/usage";
+    const load = () => api(path).then((u) => live && setUsage(u)).catch(() => {});
+    load();
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 60000);
+    return () => {
+      live = false;
+      clearInterval(poll);
+    };
+  }, [projectId, reload]);
+  if (!usage) return null;
+  const today = usage.days.length ? usage.days[0].day : null;
+  const totals = {};
+  for (const row of usage.days.filter((r) => r.day === today)) {
+    const t = (totals[row.agent] ||= { turns: 0, input: 0, cached: 0, output: 0 });
+    for (const key of ["turns", "input", "cached", "output"]) t[key] += row[key];
+  }
+  const { Claude, Codex } = usage.limits;
+  if (!Claude && !Codex && !today) return null;
+  return (
+    <div className="usage-strip">
+      {(Claude || Codex) && (
+        <p>
+          <span className="usage-label">Plan limits</span>
+          <span className="usage-items">
+            <LimitReading agent="Claude" reading={Claude} />
+            <LimitReading agent="Codex" reading={Codex} />
+          </span>
+        </p>
+      )}
+      {today && (
+        <p>
+          <span className="usage-label">
+            {today === new Date().toLocaleDateString("en-CA") ? "Today" : today}
+            {projectId ? " in this project" : ""}
+          </span>
+          <span className="usage-items">
+            {Object.entries(totals).map(([agent, t]) => (
+              <span key={agent}>
+                <strong>{agent}</strong> {t.turns} {t.turns === 1 ? "turn" : "turns"} · {formatUsage(t)}
+              </span>
+            ))}
+          </span>
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -84,6 +155,7 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
             : "The most recent turn in each project, newest first. Closing messages are shown as the agents wrote them."}
         </p>
       </header>
+      <UsageStrip projectId={projectId} reload={reload} />
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -92,7 +164,6 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
       {projectId && turns && (
         <NextTurn
           projectId={projectId}
-          projectName={projectNames[projectId] || projectId}
           lastTurn={lastTurn}
           onPinsChanged={() => setReload((n) => n + 1)}
         />
@@ -109,6 +180,14 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
             <header className="message-heading">
               <strong>{turn.agent}</strong>
               {turn.model && <span className="model">{turn.model}</span>}
+              {turn.usage && (
+                <span
+                  className="model usage"
+                  title={`${turn.usage.input.toLocaleString()} new input, ${turn.usage.cached.toLocaleString()} cached input, ${turn.usage.output.toLocaleString()} output tokens`}
+                >
+                  {tokens(turn.usage.output)} out
+                </span>
+              )}
               {turn.next && (
                 <span
                   className={`session-tag next-tag${turn.next.agent === "User" ? " your-call-tag" : ""}`}
