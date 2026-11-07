@@ -82,8 +82,16 @@ def scan(path: Path, offset: int, context: dict) -> tuple[list[dict], int]:
     """Return the turns completed after ``offset`` and the new offset.
 
     Only whole lines are consumed. ``context`` carries the model and working
-    directory of the latest ``turn_context`` across calls.
+    directory of the latest ``turn_context`` and the running token count across
+    calls. Resuming without the token count (state saved by an older courier)
+    recovers it from the earlier part of the file first.
     """
+    if offset and "total" not in context:
+        for raw in read_rollout(path, 0)[:offset].splitlines():
+            try:
+                feed_codex(context, json.loads(raw))
+            except (json.JSONDecodeError, AttributeError):
+                continue
     chunk = read_rollout(path, offset)
     end = chunk.rfind(b"\n") + 1
     completed = []

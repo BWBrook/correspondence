@@ -146,3 +146,11 @@ def test_continue_prompts_match_the_board_wording(monkeypatch):
     assert prompts["full"].startswith("Continue — from Barry, sent through the board.\n\nCodex's latest turn in "
                                       "Dwarf-Nova Memory ended at 7 Nov 2026 at 4:08 pm.")
     assert prompts["full"].endswith("> Next: Claude\n\nTake your next turn.")
+
+
+def test_courier_resuming_without_a_token_count_recovers_it(tmp_path):
+    path = rollout(tmp_path)
+    data = path.read_bytes()
+    split = data.index(b'{"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t2"')
+    rest, _ = scan(path, split, {"model": "gpt-x", "cwd": "/w"})  # state from a courier before usage existed
+    assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30}
