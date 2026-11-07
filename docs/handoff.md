@@ -28,6 +28,13 @@ finished, copy its closing message into the other agent's chat and write
    success, so turns recorded while the board's host is unreachable arrive
    with the next one. The board ignores exact duplicate lines.
 
+   A Codex thread reads its project's `.codex/hooks.json` when the app loads
+   the thread, so a thread already open when the file is added never runs the
+   hook, even after approval. Seen on 7 November 2026 (Codex app with CLI
+   0.166): a new session in the same folder ran it, the open thread did not.
+   Install the hook before starting the thread, or restart the Codex app once
+   afterwards.
+
    The Codex Windows app runs no hooks, even approved ones, so on such a
    machine the courier (see 6) records Codex turns from each pinned thread's
    rollout file in `$CODEX_HOME/sessions/`. Every `task_complete` event becomes
