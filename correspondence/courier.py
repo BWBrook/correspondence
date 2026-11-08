@@ -86,7 +86,7 @@ def scan(path: Path, offset: int, context: dict) -> tuple[list[dict], int]:
     calls. Resuming without the token count (state saved by an older courier)
     recovers it from the earlier part of the file first.
     """
-    if offset and "total" not in context:
+    if offset and context.get("total") is None:
         for raw in read_rollout(path, 0)[:offset].splitlines():
             try:
                 feed_codex(context, json.loads(raw))

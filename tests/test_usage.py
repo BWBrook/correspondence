@@ -154,3 +154,6 @@ def test_courier_resuming_without_a_token_count_recovers_it(tmp_path):
     split = data.index(b'{"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t2"')
     rest, _ = scan(path, split, {"model": "gpt-x", "cwd": "/w"})  # state from a courier before usage existed
     assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30}
+    restored = {key: None for key in ("model", "cwd", "total", "baseline", "limits")}  # as watch() restores it
+    rest, _ = scan(path, split, restored)
+    assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30}
