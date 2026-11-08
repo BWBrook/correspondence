@@ -5,7 +5,6 @@ import sys
 import pytest
 
 from correspondence.courier import scan
-from correspondence.dispatch import LocalBoard
 from correspondence.store import Store
 from correspondence.turns import continue_prompts, daily_usage, latest_limits
 from correspondence.usage import claude_limits, claude_turn_usage, codex_turn_usage
@@ -66,22 +65,6 @@ def test_codex_usage_is_the_difference_across_the_turn(tmp_path):
     assert codex_turn_usage(path)[0] == {"input": 300, "cached": 3700, "output": 30}
 
 
-def test_courier_scan_carries_usage_across_reads(tmp_path):
-    path = rollout(tmp_path)
-    data = path.read_bytes()
-    split = data.index(b'{"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t2"')
-    context = {}
-    first, offset = scan(path, 0, context)
-    assert [t["usage"] for t in first] == [{"input": 200, "cached": 800, "output": 50}, {"input": 300, "cached": 3700, "output": 30}]
-    json.dumps(context)  # the courier saves this state between rounds
-    path.write_bytes(data[:split])
-    context = {}
-    part, offset = scan(path, 0, context)
-    path.write_bytes(data)
-    rest, _ = scan(path, offset, json.loads(json.dumps(context)))
-    assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30} and rest[0]["limits"]["windows"][0]["percent"] == 7.5
-
-
 def test_hook_records_claude_usage(tmp_path):
     transcript = write(tmp_path / "t.jsonl", [{"type": "user", "message": {"content": "Go"}}, assistant("m", 1, 2, 3, 4)])
     payload = {"hook_event_name": "Stop", "session_id": "s", "transcript_path": str(transcript), "last_assistant_message": "Done."}
@@ -98,23 +81,16 @@ APP_REPORT = {"plan": {"status": "ok", "plan": "Team", "windows": [
     "context": {"tokensUsed": 1}}
 
 
-def test_claude_limits_come_from_the_app_report(tmp_path):
-    reading = claude_limits(APP_REPORT)
-    assert [(w["label"], w["percent"]) for w in reading["windows"]] == [("5-hour limit", 21.0), ("Weekly · all models", 34.0)]
+def test_claude_limits_reach_the_board_from_the_app_report(tmp_path):
     with pytest.raises(ValueError):
         claude_limits({"plan": {"status": "unavailable"}})
-    board = LocalBoard(Store(tmp_path), "wsl")
-    board.report_limits(APP_REPORT)
-    assert board.store.limits("Claude")["windows"][1]["percent"] == 34.0
-
-
-def test_limits_command_accepts_the_report_with_surrounding_text(tmp_path):
     env = {"CORRESPONDENCE_DATA_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
-    Store(tmp_path)
+    store = Store(tmp_path)
     result = subprocess.run([sys.executable, "-m", "correspondence.dispatch", "limits"],
                             input="Usage report:\n" + json.dumps(APP_REPORT) + "\n", text=True, capture_output=True, env=env)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Claude limits: 5-hour limit 21%, Weekly · all models 34%"
+    assert store.limits("Claude")["windows"][1]["resets_at"] == "2026-11-09T14:00:00+00:00"
     bad = subprocess.run([sys.executable, "-m", "correspondence.dispatch", "limits"], input="nothing",
                          text=True, capture_output=True, env=env)
     assert bad.returncode != 0 and "Limits not recorded" in bad.stderr
@@ -148,12 +124,17 @@ def test_continue_prompts_match_the_board_wording(monkeypatch):
     assert prompts["full"].endswith("> Next: Claude\n\nTake your next turn.")
 
 
-def test_courier_resuming_without_a_token_count_recovers_it(tmp_path):
+def test_courier_usage_survives_split_reads_and_restored_state(tmp_path):
     path = rollout(tmp_path)
     data = path.read_bytes()
     split = data.index(b'{"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t2"')
-    rest, _ = scan(path, split, {"model": "gpt-x", "cwd": "/w"})  # state from a courier before usage existed
-    assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30}
-    restored = {key: None for key in ("model", "cwd", "total", "baseline", "limits")}  # as watch() restores it
-    rest, _ = scan(path, split, restored)
-    assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30}
+    path.write_bytes(data[:split])
+    context = {}
+    _, offset = scan(path, 0, context)
+    path.write_bytes(data)
+    saved = json.loads(json.dumps(context))  # the courier saves this state between rounds
+    restored = {key: None for key in ("model", "cwd", "total", "baseline", "limits")}  # as watch() restores older state
+    for state in (saved, {"model": "gpt-x", "cwd": "/w"}, restored):
+        rest, _ = scan(path, offset, state)
+        assert rest[0]["usage"] == {"input": 300, "cached": 3700, "output": 30}
+    assert rest[0]["limits"]["windows"][0]["percent"] == 7.5

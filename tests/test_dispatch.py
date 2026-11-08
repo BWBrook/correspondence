@@ -100,33 +100,33 @@ def test_claude_prompt_waits_for_the_messenger_and_is_claimed_once(claude, capsy
     assert client.get("/api/dispatches?project_id=p").json()[0]["status"] == "delivered"
 
 
-def test_claude_prompt_fails_when_its_session_is_not_running(claude, capsys):
-    from correspondence.dispatch import LocalBoard, wait
+def test_a_prompt_can_be_withdrawn_until_picked_up_and_given_up_once_its_claim_goes_stale(claude):
     client, tmp_path = claude
-    (tmp_path / "claude-sessions" / "2.json").unlink()
-    first = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
-    store = Store(tmp_path)
-    with store.connect(write=True) as con:
-        con.execute("INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at) VALUES ('p','Claude','other-session-id','y','queued','2026')")
-    (tmp_path / "claude-sessions" / "3.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "other-session-id", "name": "Other", "status": "idle"}))
-    wait(LocalBoard(store), poll=0.01)
-    assert [json.loads(line)["to"] for line in capsys.readouterr().out.splitlines()] == ["Other"]
-    failed = [d for d in store.list_dispatches("p") if d["id"] == first["id"]][0]
-    assert failed["status"] == "failed" and "not running" in failed["detail"]
-
-
-def test_unclaimed_claude_prompt_can_be_cancelled(claude):
-    client, _ = claude
-    sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
-    assert client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).status_code == 409
-    cancelled = client.post(f"/api/dispatches/{sent['id']}/cancel", json={}, headers=HEADERS).json()
+    send = lambda: client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS)
+    first = send().json()
+    assert send().status_code == 409  # one prompt in flight per agent
+    cancelled = client.post(f"/api/dispatches/{first['id']}/cancel", json={}, headers=HEADERS).json()
     assert cancelled["status"] == "failed" and cancelled["detail"] == "Cancelled by User"
+    second = send().json()
+    store = Store(tmp_path)
+    assert store.claim_dispatch(second["id"])
+    assert client.post(f"/api/dispatches/{second['id']}/cancel", json={}, headers=HEADERS).status_code == 409
+    with store.connect(write=True) as con:  # the messenger took it and never reported back
+        con.execute("UPDATE dispatches SET claimed_at='2026-01-01T00:00:00+00:00' WHERE id=?", (second["id"],))
+    given_up = client.post(f"/api/dispatches/{second['id']}/cancel", json={}, headers=HEADERS).json()
+    assert given_up["status"] == "failed" and "no outcome was reported" in given_up["detail"]
+    assert store.finish_dispatch(second["id"], True, "late report")["status"] == "failed"
+    third = send().json()
+    store.set_project_agent("p", "Claude", "another-claude-session")  # never wake a session that is no longer main
+    withdrawn = store.list_dispatches("p", 1)[0]
+    assert (withdrawn["id"], withdrawn["status"], withdrawn["detail"]) == (third["id"], "failed", "Cancelled: the main session changed")
 
 
 def test_done_command_records_the_outcome_once(claude):
     import subprocess, sys
     client, tmp_path = claude
     sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
+    Store(tmp_path).claim_dispatch(sent["id"])
     run = lambda *a: subprocess.run([sys.executable, "-c", "from correspondence.dispatch import main; main()", "done", str(sent["id"]), *a],
                                     capture_output=True, text=True, env={**os.environ, "CORRESPONDENCE_DATA_DIR": str(tmp_path)})
     assert run("delivered").returncode == 0
@@ -147,23 +147,34 @@ def test_archive_carries_pins_and_dispatches(tmp_path):
     store = Store(tmp_path)
     store.create_project("p", "P")
     store.set_project_agent("p", "Codex", MAIN)
-    store.finish_dispatch(store.create_dispatch("p", "Codex", "x")["id"], True, "")
+    store.set_project_agent("p", "Claude", CLAUDE)
+    sent = store.create_dispatch("p", "Codex", "x")
+    store.claim_dispatch(sent["id"])
+    store.finish_dispatch(sent["id"], True, "")
+    store.start_auto("p", 3, 80)
+    waiting = store.create_dispatch("p", "Claude", "still waiting")
     token = store.list_projects("User")[0]["state_token"]
     archived = store.archive_project("p", token)
+    assert store.machine_pins(None) == []  # couriers stop watching an archived project's sessions
     with store.connect() as con:
-        assert con.execute("SELECT project_id FROM project_agents").fetchone()[0] == archived["id"]
-        assert con.execute("SELECT project_id FROM dispatches").fetchone()[0] == archived["id"]
+        assert con.execute("SELECT DISTINCT project_id FROM project_agents").fetchall()[0][0] == archived["id"]
+        assert {r[0] for r in con.execute("SELECT project_id FROM dispatches")} == {archived["id"]}
+        assert con.execute("SELECT detail FROM dispatches WHERE id=?", (waiting["id"],)).fetchone()[0] == "Cancelled: project archived"
+        assert con.execute("SELECT stopped_reason FROM auto_continue").fetchone()[0] == "The project was archived or restored"
 
 
-def test_claude_prompt_waits_while_its_session_is_busy(claude):
+def test_claude_prompt_waits_until_its_session_is_running_and_idle(claude):
     from correspondence.dispatch import LocalBoard, collect
     client, tmp_path = claude
     record = tmp_path / "claude-sessions" / "2.json"
-    record.write_text(record.read_text().replace('"idle"', '"busy"'))
+    live = record.read_text()
+    record.unlink()
     sent = client.post("/api/dispatches", json={"project_id": "p", "target": "Claude", "body": "x"}, headers=HEADERS).json()
     store = Store(tmp_path)
+    assert collect(LocalBoard(store)) == []  # not running: the prompt waits instead of failing
+    record.write_text(live.replace('"idle"', '"busy"'))
     assert collect(LocalBoard(store)) == [] and store.waiting_dispatches("Claude")[0]["id"] == sent["id"]
-    record.write_text(record.read_text().replace('"busy"', '"idle"'))
+    record.write_text(live)
     assert [e["dispatch"] for e in collect(LocalBoard(store))] == [sent["id"]] and collect(LocalBoard(store)) == []
 
 

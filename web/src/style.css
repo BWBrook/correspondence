@@ -1262,7 +1262,7 @@ dialog::backdrop {
 .turn-discussions a {
   color: var(--teal);
 }
-.mode-control {
+.auto-control {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1270,48 +1270,22 @@ dialog::backdrop {
   margin-bottom: 10px;
   font-size: 13px;
 }
-.segmented {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.segmented button {
-  border: 0;
-  border-right: 1px solid var(--line);
-  border-radius: 0;
-  background: #fff;
-  color: var(--ink);
-  padding: 4px 12px;
-  font-size: 13px;
-}
-.segmented button:last-child {
-  border-right: 0;
-}
-.segmented button.active {
-  background: var(--teal);
-  color: #fff;
-}
-.cruise-form {
+.auto-form {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
-.cruise-form input {
+.auto-form input {
   width: 4.5em;
   font: inherit;
   padding: 2px 4px;
 }
-.mode-status.cruise {
+.auto-status.running {
   color: var(--teal);
   font-weight: 600;
 }
-.mode-status.hold {
-  color: #8a5a00;
-  font-weight: 600;
-}
-.cruise-tag {
+.auto-tag {
   margin-left: 6px;
   padding: 0 6px;
   border: 1px solid var(--teal);

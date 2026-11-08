@@ -154,9 +154,10 @@ def claude_limits(report: dict, at=None) -> dict:
     return {"read_at": _iso(at) or now(), "windows": windows, "credits": None}
 
 
-def highest(limits: dict | None) -> dict | None:
-    """The fullest window in a reading."""
-    windows = (limits or {}).get("windows") or []
+def highest(limits: dict | None, at: str | None = None) -> dict | None:
+    """The fullest window in a reading that has not reset since it was read."""
+    at = at or now()
+    windows = [w for w in (limits or {}).get("windows") or [] if not w.get("resets_at") or w["resets_at"] > at]
     return max(windows, key=lambda w: w["percent"]) if windows else None
 
 

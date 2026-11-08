@@ -15,13 +15,13 @@ from pydantic import BaseModel, ConfigDict
 
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store, USER
-from .dispatch import claude_session, courier_online, deliver_codex, messenger_listening, remote_claude_session
-from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_per_project, link_discussions,
-                    project_sessions, project_turns, read_turns)
-from . import cruise
+from .dispatch import claude_session, courier_online, deliver_here, messenger_listening, remote_claude_session
+from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_project,
+                    link_discussions, project_sessions, project_turns, read_turns, turn_key)
+from . import autocontinue
 
-CRUISE_SECONDS = 3
-log = logging.getLogger("correspondence.cruise")
+AUTO_SECONDS = 3
+log = logging.getLogger("correspondence.autocontinue")
 
 
 class Payload(BaseModel):
@@ -73,17 +73,16 @@ class DispatchCreate(Payload):
     body: str
 
 
-class ModeChange(Payload):
-    mode: str
-    hops: int | None = None
-    ceiling: int | None = None
+class AutoStart(Payload):
+    hops: int
+    ceiling: int
 
 
 def create_app(data_dir=None, dist_dir=None):
     @asynccontextmanager
     async def lifespan(app):
         app.state.store = Store(data_dir)
-        watcher = asyncio.create_task(watch_cruises())
+        watcher = asyncio.create_task(watch_autos())
         yield
         watcher.cancel()
 
@@ -117,18 +116,18 @@ def create_app(data_dir=None, dist_dir=None):
     def store():
         return app.state.store
 
-    def run_cruises():
-        if store().cruising_projects():
-            for line in cruise.step(store(), read_turns(store().directory)):
-                log.warning("cruise %s", line)
+    def run_autos():
+        if store().running_autos():
+            for line in autocontinue.step(store(), read_turns(store().directory)):
+                log.warning("auto-continue %s", line)
 
-    async def watch_cruises():
+    async def watch_autos():
         while True:
-            await asyncio.sleep(CRUISE_SECONDS)
+            await asyncio.sleep(AUTO_SECONDS)
             try:
-                await asyncio.to_thread(run_cruises)
+                await asyncio.to_thread(run_autos)
             except Exception:
-                log.exception("cruise round failed")
+                log.exception("auto-continue round failed")
 
     @app.get("/api/health")
     def health():
@@ -205,16 +204,19 @@ def create_app(data_dir=None, dist_dir=None):
         return {"limits": {"Claude": store().limits("Claude"), "Codex": latest_limits(history, "Codex")},
                 "days": daily_usage(history, project_id, days)}
 
-    @app.get("/api/projects/{project_id}/mode")
-    def project_mode(project_id: str):
-        return store().project_mode(project_id)
+    @app.get("/api/projects/{project_id}/auto")
+    def auto_continue(project_id: str):
+        return store().auto_continue(project_id)
 
-    @app.post("/api/projects/{project_id}/mode")
-    def set_project_mode(project_id: str, payload: ModeChange):
-        store().set_project_mode(project_id, payload.mode, payload.hops, payload.ceiling)
-        if payload.mode == "cruise":
-            run_cruises()
-        return store().project_mode(project_id)
+    @app.post("/api/projects/{project_id}/auto")
+    def start_auto(project_id: str, payload: AutoStart):
+        store().start_auto(project_id, payload.hops, payload.ceiling)
+        run_autos()  # the first hand-off goes now if the latest turn already names an agent
+        return store().auto_continue(project_id)
+
+    @app.post("/api/projects/{project_id}/auto/stop")
+    def stop_auto(project_id: str, payload: Payload):
+        return store().stop_auto(project_id)
 
     @app.get("/api/projects/{project_id}/agents")
     def project_agents(project_id: str):
@@ -248,11 +250,9 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.post("/api/dispatches", status_code=201)
     def create_dispatch(payload: DispatchCreate):
-        dispatch = store().create_dispatch(payload.project_id, payload.target, payload.body)
-        if payload.target == "Claude" or dispatch["machine"] is not None:
-            return {**dispatch, "answered_at": None}
-        delivered, detail = deliver_codex(dispatch["session_id"], dispatch["body"])
-        return {**store().finish_dispatch(dispatch["id"], delivered, detail), "answered_at": None}
+        latest = latest_main_turn(read_turns(store().directory), payload.project_id, store().project_agents(), store().user_name())
+        dispatch = store().create_dispatch(payload.project_id, payload.target, payload.body, after_turn=turn_key(latest))
+        return {**deliver_here(store(), dispatch), "answered_at": None}
 
     @app.post("/api/dispatches/{dispatch_id}/cancel")
     def cancel_dispatch(dispatch_id: int, payload: Payload):

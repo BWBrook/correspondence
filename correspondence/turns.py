@@ -39,6 +39,7 @@ def read_turns(directory: Path) -> list[dict]:
                 continue
             if isinstance(entry, dict) and entry.get("recorded_at") and entry.get("project"):
                 turns.append({field: entry.get(field) for field in FIELDS})
+    turns.reverse()  # within one second, the line appended last is the newer turn
     turns.sort(key=lambda turn: turn["recorded_at"], reverse=True)
     return turns
 
@@ -61,6 +62,17 @@ def annotate(turn: dict, pins: dict, user_name: str = "User") -> dict:
     role = None if pinned is None else "main" if pinned == turn["session_id"] else "other"
     automation = (turn["message"] or "").lstrip().startswith("<heartbeat>")
     return {**turn, "role": role, "automation": automation, "next": declared_next(turn["message"], user_name)}
+
+
+def turn_key(turn: dict | None) -> str | None:
+    """A turn's identity on the board, recorded with each prompt sent after it."""
+    return f"{turn['session_id']}@{turn['recorded_at']}" if turn else None
+
+
+def latest_main_turn(turns: list[dict], project_id: str, pins: dict, user_name: str = "User") -> dict | None:
+    """The project's newest turn from one of its main sessions, skipping advisors and automation heartbeats."""
+    return next((t for t in (annotate(t, pins, user_name) for t in turns if t["project"] == project_id)
+                 if t["role"] == "main" and not t["automation"]), None)
 
 
 def link_discussions(turns: list[dict], history: list[dict], posts) -> list[dict]:
@@ -116,7 +128,7 @@ def project_sessions(directory: Path, project_id: str) -> list[dict]:
 def answered_at(turns: list[dict], dispatch: dict) -> str | None:
     """Time of the first turn from the dispatched session after the request."""
     replies = [t["recorded_at"] for t in turns if t["session_id"] == dispatch["session_id"]
-               and t["recorded_at"] > dispatch["requested_at"][:19]]
+               and t["recorded_at"][:19] > dispatch["requested_at"][:19]]
     return min(replies) if replies else None
 
 

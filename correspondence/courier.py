@@ -210,16 +210,26 @@ def announce(home: Path, directory: Path, session: str, project: str, machine: s
     return entry
 
 
-def exchange(board, log) -> dict[str, str]:
-    """Report pinned Claude sessions and deliver waiting Codex prompts; return the pinned Codex threads."""
+def exchange(board, log, unreported: dict) -> dict[str, str]:
+    """Report pinned Claude sessions and deliver waiting Codex prompts; return the pinned Codex threads.
+
+    ``unreported`` holds outcomes the board has not yet acknowledged, keyed by
+    dispatch, so a prompt delivered just as the connection drops is reported
+    on the next round instead of staying claimed with no outcome.
+    """
+    for dispatch_id, (delivered, detail) in list(unreported.items()):
+        board.finish(dispatch_id, delivered, detail)
+        del unreported[dispatch_id]
     pins = board.pins()
     board.report_sessions({p["session_id"]: claude_session(p["session_id"]) for p in pins if p["agent"] == "Claude"})
     for dispatch in board.waiting("Codex"):
         if board.claim(dispatch["id"]):
-            delivered, detail = deliver_codex(dispatch["session_id"], dispatch["body"])
-            board.finish(dispatch["id"], delivered, detail)
+            unreported[dispatch["id"]] = deliver_codex(dispatch["session_id"], dispatch["body"])
+            delivered, detail = unreported[dispatch["id"]]
             log(f"dispatch {dispatch['id']} to Codex {dispatch['session_id']}: "
                 f"{'delivered' if delivered else 'failed'} {detail}".strip())
+            board.finish(dispatch["id"], delivered, detail)
+            del unreported[dispatch["id"]]
     return {p["session_id"]: p["project_id"] for p in pins if p["agent"] == "Codex"}
 
 
@@ -248,10 +258,11 @@ def main() -> None:
     state = load_state(directory)
     threads = {thread: entry["project"] for thread, entry in state.items() if entry.get("project")}
     board_retry = forward_retry = 0.0
+    unreported: dict = {}
     while True:
         if time.monotonic() >= board_retry:
             try:
-                threads = exchange(board, log)
+                threads = exchange(board, log, unreported)
                 board_retry = 0.0
             except Exception as error:
                 board_retry = time.monotonic() + RECONNECT_SECONDS

@@ -212,9 +212,9 @@ directory unless you deliberately intend to delete the correspondence.
 
 ## Scope and limits
 
-Agents are woken only by prompts the user sends, or by hand-offs within a cruise
-the user starts, which stops at a hand-off count and a plan-limit ceiling the
-user sets ([hand-offs](handoff.md#stage-3)). There is no open-ended
+Agents are woken only by prompts the user sends, or by hand-offs within an
+auto-continue run the user starts, which stops at a hand-off count and a
+plan-limit ceiling the user sets ([hand-offs](handoff.md#stage-3)). There is no open-ended
 model-to-model loop. Project paths are
 references, not permission to read or modify those files. The board cannot force
 an active assistant to check messages; use an explicit prompt or the repository

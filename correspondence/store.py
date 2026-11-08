@@ -19,9 +19,10 @@ LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
-MODES = ("manual", "hold", "cruise")
-CRUISE_HOPS = (1, 50)
-CRUISE_CEILING = (10, 100)
+SCHEMA_VERSION = 10
+AUTO_HOPS = (1, 50)
+AUTO_CEILING = (10, 100)
+STALE_CLAIM_SECONDS = 120
 MACHINE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 
 
@@ -171,20 +172,40 @@ class Store:
                     raise sqlite3.IntegrityError("Integrity failure during user migration")
                 con.execute("PRAGMA user_version=8")
             if version < 9:
-                con.execute("""CREATE TABLE IF NOT EXISTS project_modes (
-                    project_id TEXT PRIMARY KEY REFERENCES projects(id),
-                    mode TEXT NOT NULL CHECK(mode IN ('manual','hold','cruise')),
-                    hops_left INTEGER, ceiling INTEGER, started_at TEXT,
-                    stopped_reason TEXT, stopped_at TEXT, updated_at TEXT NOT NULL)""")
                 if "origin" not in {row[1] for row in con.execute("PRAGMA table_info(dispatches)")}:
                     con.execute("ALTER TABLE dispatches ADD COLUMN origin TEXT")
                 con.execute("PRAGMA user_version=9")
+            if version < 10:
+                cls._upgrade_auto_continue(con)
+                con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             con.commit()
         except Exception:
             con.rollback()
             raise
         finally:
             con.execute("PRAGMA foreign_keys=ON")
+
+    @staticmethod
+    def _upgrade_auto_continue(con):
+        """Replace v9's Manual/Hold/Cruise modes with one auto-continue run per project."""
+        con.execute("""CREATE TABLE IF NOT EXISTS auto_continue (
+            project_id TEXT PRIMARY KEY REFERENCES projects(id),
+            hops_left INTEGER NOT NULL CHECK(hops_left >= 0),
+            ceiling INTEGER NOT NULL CHECK(ceiling BETWEEN 10 AND 100),
+            started_at TEXT NOT NULL, stopped_at TEXT, stopped_reason TEXT,
+            CHECK((stopped_at IS NULL) = (stopped_reason IS NULL)))""")
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_modes'").fetchone():
+            con.execute("""INSERT INTO auto_continue(project_id,hops_left,ceiling,started_at,stopped_at,stopped_reason)
+                SELECT project_id, MAX(COALESCE(hops_left,0),0), COALESCE(ceiling,80),
+                       COALESCE(started_at,stopped_at,updated_at),
+                       COALESCE(stopped_at,updated_at),
+                       CASE WHEN mode='cruise' THEN 'Stopped by the board upgrade; start it again'
+                            ELSE COALESCE(stopped_reason,'Stopped') END
+                FROM project_modes WHERE mode='cruise' OR stopped_reason IS NOT NULL""")
+            con.execute("DROP TABLE project_modes")
+        con.execute("UPDATE dispatches SET origin='auto' WHERE origin='cruise'")
+        if "after_turn" not in {row[1] for row in con.execute("PRAGMA table_info(dispatches)")}:
+            con.execute("ALTER TABLE dispatches ADD COLUMN after_turn TEXT")
 
     @staticmethod
     def _upgrade_participants(con):
@@ -408,7 +429,9 @@ class Store:
         con.execute("UPDATE threads SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("UPDATE project_agents SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("UPDATE dispatches SET project_id=? WHERE project_id=?", (new_id, old_id))
-        con.execute("UPDATE project_modes SET project_id=?, mode='manual', hops_left=NULL WHERE project_id=?", (new_id, old_id))
+        con.execute("UPDATE auto_continue SET project_id=? WHERE project_id=?", (new_id, old_id))
+        con.execute("""UPDATE auto_continue SET stopped_at=?, stopped_reason='The project was archived or restored'
+            WHERE project_id=? AND stopped_at IS NULL""", (now(), new_id))
 
     @staticmethod
     def _project_state(con, project_id, expected_state):
@@ -433,6 +456,8 @@ class Store:
             self._rekey_project(con, project_id, archive_id)
             con.execute("UPDATE projects SET archived_at=?,archived_original_id=?,state_token=? WHERE id=?",
                         (now(), project_id, uuid4().hex, archive_id))
+            con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: project archived'
+                WHERE project_id=? AND status='queued' AND claimed_at IS NULL""", (archive_id,))
             return self._require(con, "projects", archive_id)
 
     def restore_project(self, project_id, expected_state: str):
@@ -481,7 +506,8 @@ class Store:
         """Every main session pinned on one machine, for that machine's courier."""
         with self.connect() as con:
             return [dict(row) for row in con.execute(
-                "SELECT project_id, agent, session_id FROM project_agents WHERE machine=? ORDER BY project_id, agent", (machine,))]
+                """SELECT a.project_id, a.agent, a.session_id FROM project_agents a JOIN projects p ON p.id=a.project_id
+                WHERE a.machine=? AND p.archived_at IS NULL ORDER BY a.project_id, a.agent""", (machine,))]
 
     def set_project_agent(self, project_id, agent, session_id, machine=None):
         if agent not in DISPATCH_TARGETS:
@@ -492,6 +518,9 @@ class Store:
             raise ValueError("Machine must be a short lowercase name")
         with self.connect(write=True) as con:
             self._project(con, project_id)
+            con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: the main session changed'
+                WHERE project_id=? AND target=? AND status='queued' AND claimed_at IS NULL AND session_id IS NOT ?""",
+                        (project_id, agent, session_id))
             if session_id is None:
                 con.execute("DELETE FROM project_agents WHERE project_id=? AND agent=?", (project_id, agent))
             else:
@@ -501,40 +530,53 @@ class Store:
                             (project_id, agent, session_id, now(), machine))
         return self.project_agents(project_id)
 
-    def create_dispatch(self, project_id, target, body, origin=None):
-        """Record a prompt for a project's main agent; refuse one on hold or a duplicate in flight.
+    def create_dispatch(self, project_id, target, body, after_turn=None, run=None):
+        """Record a prompt for a project's main agent; refuse one while another to it is in flight.
 
-        ``origin`` is ``"cruise"`` for a prompt the board sent itself while the
-        project cruises, and None for one the user sent.
+        ``after_turn`` names the project's latest main turn when the prompt was
+        sent (``turns.turn_key``), so auto-continue can tell that the turn has
+        had its prompt without comparing clocks across machines. ``run`` is the
+        ``started_at`` of the auto-continue run sending the prompt: it goes only
+        while that run is going and has hand-offs left, and spends one, and only
+        when no other prompt in the project is still on its way, so a run never
+        has two agents working at once.
         """
         if target not in DISPATCH_TARGETS:
             raise ValueError("Target must be Claude or Codex")
-        if origin not in (None, "cruise"):
-            raise ValueError("Origin must be cruise or unset")
         body = clean_text(body, "Prompt", 50_000)
         with self.connect(write=True) as con:
             self._project(con, project_id)
-            if self._mode(con, project_id)["mode"] == "hold":
-                raise Conflict("This project is on hold; release it to send prompts")
             pin = con.execute("SELECT session_id, machine FROM project_agents WHERE project_id=? AND agent=?", (project_id, target)).fetchone()
             if pin is None:
                 raise Conflict(f"Set this project's main {target} session first")
             cutoff = datetime.fromtimestamp(time.time() - DISPATCH_GAP_SECONDS, timezone.utc).isoformat(timespec="microseconds")
             if con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND target=?
                     AND (status='queued' OR (status='delivered' AND delivered_at>?))""", (project_id, target, cutoff)).fetchone():
-                raise Conflict(f"A prompt to {target} was just sent; wait a few seconds before sending another")
-            cursor = con.execute("""INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at,machine,origin)
-                VALUES (?,?,?,?,'queued',?,?,?)""", (project_id, target, pin["session_id"], body, now(), pin["machine"], origin))
-            if origin == "cruise":
-                con.execute("UPDATE project_modes SET hops_left=hops_left-1, updated_at=? WHERE project_id=?", (now(), project_id))
+                raise Conflict(f"A prompt to {target} is still on its way or was just delivered; wait or cancel it first")
+            if run is not None:
+                if {r[0] for r in con.execute("SELECT agent FROM project_agents WHERE project_id=?", (project_id,))} != DISPATCH_TARGETS:
+                    raise Conflict("A main session is no longer chosen")
+                if con.execute("SELECT 1 FROM dispatches WHERE project_id=? AND status='queued'", (project_id,)).fetchone():
+                    raise Conflict("Another prompt in this project is still on its way")
+                if self._prompted(con, project_id, after_turn):
+                    raise Conflict("That turn has already had its prompt")
+            if run is not None and not con.execute("""UPDATE auto_continue SET hops_left=hops_left-1
+                    WHERE project_id=? AND started_at=? AND stopped_at IS NULL AND hops_left>0""", (project_id, run)).rowcount:
+                raise Conflict("That auto-continue run has stopped or has no hand-offs left")
+            cursor = con.execute("""INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at,machine,origin,after_turn)
+                VALUES (?,?,?,?,'queued',?,?,?,?)""", (project_id, target, pin["session_id"], body, now(), pin["machine"],
+                                                      None if run is None else "auto", after_turn))
             return self._require(con, "dispatches", cursor.lastrowid)
 
     def finish_dispatch(self, dispatch_id, delivered, detail, machine=None):
+        """Record the outcome of a claimed prompt; a prompt already resolved keeps its status."""
         with self.connect(write=True) as con:
             dispatch = self._require(con, "dispatches", dispatch_id)
             if dispatch["machine"] != machine:
                 raise Conflict(f"Dispatch {dispatch_id} is not for this machine")
-            con.execute("UPDATE dispatches SET status=?, delivered_at=?, detail=? WHERE id=? AND status='queued'",
+            if dispatch["status"] == "queued" and dispatch["claimed_at"] is None:
+                raise Conflict(f"Dispatch {dispatch_id} has not been picked up")
+            con.execute("""UPDATE dispatches SET status=?, delivered_at=?, detail=? WHERE id=? AND status='queued'""",
                         ("delivered" if delivered else "failed", now() if delivered else None, (detail or "")[:2000], dispatch_id))
             return self._require(con, "dispatches", dispatch_id)
 
@@ -571,66 +613,113 @@ class Store:
                 ids)}
 
     def claim_dispatch(self, dispatch_id, machine=None):
-        """Hand one waiting prompt to the machine's messenger or courier; False if already taken."""
+        """Hand one waiting prompt to the machine's messenger or courier, or to the board's own Codex
+        delivery; False if already taken. A claimed prompt is never handed out again."""
         with self.connect(write=True) as con:
             return con.execute("""UPDATE dispatches SET claimed_at=? WHERE id=? AND machine IS ? AND status='queued'
                 AND claimed_at IS NULL""", (now(), dispatch_id, machine)).rowcount == 1
 
     def cancel_dispatch(self, dispatch_id):
+        """Withdraw a prompt not yet picked up, or give up on one picked up but never reported.
+
+        A claim is never reissued, because the prompt may have been delivered
+        and only its report lost; after ``STALE_CLAIM_SECONDS`` the user can
+        mark it failed instead, which frees the agent for the next prompt.
+        """
         with self.connect(write=True) as con:
             dispatch = self._require(con, "dispatches", dispatch_id)
-            if dispatch["status"] != "queued" or dispatch["claimed_at"] is not None:
-                raise Conflict("Only a prompt the messenger has not yet picked up can be cancelled")
-            con.execute("UPDATE dispatches SET status='failed', detail=? WHERE id=?", (f"Cancelled by {self._user_name(con)}", dispatch_id))
+            user = self._user_name(con)
+            if dispatch["status"] != "queued":
+                raise Conflict("This prompt has already been delivered or has failed")
+            if dispatch["claimed_at"] is None:
+                detail = f"Cancelled by {user}"
+            elif self._age(dispatch["claimed_at"]) >= STALE_CLAIM_SECONDS:
+                detail = f"Picked up but no outcome was reported; {user} gave up on it"
+            else:
+                raise Conflict("The messenger or courier is delivering this prompt now")
+            con.execute("UPDATE dispatches SET status='failed', detail=? WHERE id=? AND status='queued'", (detail, dispatch_id))
             return self._require(con, "dispatches", dispatch_id)
 
     @staticmethod
-    def _mode(con, project_id):
-        row = con.execute("SELECT * FROM project_modes WHERE project_id=?", (project_id,)).fetchone()
-        return dict(row) if row else {"project_id": project_id, "mode": "manual", "hops_left": None, "ceiling": None,
-                                      "started_at": None, "stopped_reason": None, "stopped_at": None}
+    def _age(stamp):
+        return time.time() - datetime.fromisoformat(stamp).timestamp()
 
-    def project_mode(self, project_id):
-        """Manual (the default), Hold or Cruise, with the cruise budget and why the last cruise stopped."""
+    @staticmethod
+    def _auto(con, project_id):
+        row = con.execute("SELECT * FROM auto_continue WHERE project_id=?", (project_id,)).fetchone()
+        if row is None:
+            return {"project_id": project_id, "running": False, "hops_left": None, "ceiling": None,
+                    "started_at": None, "stopped_at": None, "stopped_reason": None}
+        return {**dict(row), "running": row["stopped_at"] is None}
+
+    def auto_continue(self, project_id):
+        """The project's latest auto-continue run: running, or why it stopped."""
         with self.connect() as con:
             self._project(con, project_id)
-            return self._mode(con, project_id)
+            return self._auto(con, project_id)
 
-    def set_project_mode(self, project_id, mode, hops=None, ceiling=None, reason=None):
-        """Change a project's mode. Hold cancels its prompts not yet picked up; Cruise sets a fresh budget."""
-        if mode not in MODES:
-            raise ValueError("Mode must be manual, hold or cruise")
-        if mode == "cruise":
-            if not (isinstance(hops, int) and CRUISE_HOPS[0] <= hops <= CRUISE_HOPS[1]):
-                raise ValueError(f"Hand-offs must be {CRUISE_HOPS[0]}–{CRUISE_HOPS[1]}")
-            if not (isinstance(ceiling, int) and CRUISE_CEILING[0] <= ceiling <= CRUISE_CEILING[1]):
-                raise ValueError(f"The limit ceiling must be {CRUISE_CEILING[0]}–{CRUISE_CEILING[1]}%")
-        stamp = now()
+    def start_auto(self, project_id, hops, ceiling):
+        """Start auto-continue for ``hops`` hand-offs, stopping at ``ceiling`` percent of any plan limit."""
+        if not (isinstance(hops, int) and AUTO_HOPS[0] <= hops <= AUTO_HOPS[1]):
+            raise ValueError(f"Hand-offs must be {AUTO_HOPS[0]}–{AUTO_HOPS[1]}")
+        if not (isinstance(ceiling, int) and AUTO_CEILING[0] <= ceiling <= AUTO_CEILING[1]):
+            raise ValueError(f"The limit ceiling must be {AUTO_CEILING[0]}–{AUTO_CEILING[1]}%")
         with self.connect(write=True) as con:
             self._project(con, project_id)
-            previous = self._mode(con, project_id)
-            if mode == "cruise":
-                pins = {row[0] for row in con.execute("SELECT agent FROM project_agents WHERE project_id=?", (project_id,))}
-                if pins != DISPATCH_TARGETS:
-                    raise Conflict("Choose both main sessions before cruising")
-                values = (mode, hops, ceiling, stamp, None, None)
-            elif previous["mode"] == "cruise":
-                values = (mode, None, None, None, reason or f"Stopped by {self._user_name(con)}", stamp)
-            else:
-                values = (mode, None, None, None, previous["stopped_reason"], previous["stopped_at"])
-            con.execute("""INSERT INTO project_modes(project_id,mode,hops_left,ceiling,started_at,stopped_reason,stopped_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET mode=excluded.mode, hops_left=excluded.hops_left,
-                ceiling=excluded.ceiling, started_at=excluded.started_at, stopped_reason=excluded.stopped_reason,
-                stopped_at=excluded.stopped_at, updated_at=excluded.updated_at""", (project_id, *values, stamp))
-            if mode == "hold":
-                con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: project put on hold'
-                    WHERE project_id=? AND status='queued' AND claimed_at IS NULL""", (project_id,))
-            return self._mode(con, project_id)
+            pins = {row[0] for row in con.execute("SELECT agent FROM project_agents WHERE project_id=?", (project_id,))}
+            if pins != DISPATCH_TARGETS:
+                raise Conflict("Choose both main sessions before starting auto-continue")
+            if self._auto(con, project_id)["running"]:
+                raise Conflict("Auto-continue is already running; stop it first")
+            con.execute("""INSERT INTO auto_continue(project_id,hops_left,ceiling,started_at,stopped_at,stopped_reason)
+                VALUES (?,?,?,?,NULL,NULL) ON CONFLICT(project_id) DO UPDATE SET hops_left=excluded.hops_left,
+                ceiling=excluded.ceiling, started_at=excluded.started_at, stopped_at=NULL, stopped_reason=NULL""",
+                        (project_id, hops, ceiling, now()))
+            return self._auto(con, project_id)
 
-    def cruising_projects(self):
+    def stop_auto(self, project_id, reason=None, run=None):
+        """Stop the running auto-continue and withdraw its prompts not yet picked up.
+
+        ``run`` (a run's ``started_at``) stops only that run, so a decision
+        made on a stale reading never ends a run the user has since restarted.
+        """
+        with self.connect(write=True) as con:
+            self._project(con, project_id)
+            current = self._auto(con, project_id)
+            if current["running"] and run in (None, current["started_at"]):
+                reason = reason or f"Stopped by {self._user_name(con)}"
+                con.execute("UPDATE auto_continue SET stopped_at=?, stopped_reason=? WHERE project_id=?", (now(), reason, project_id))
+                con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: auto-continue stopped'
+                    WHERE project_id=? AND origin='auto' AND status='queued' AND claimed_at IS NULL AND requested_at>=?""",
+                            (project_id, current["started_at"]))
+            return self._auto(con, project_id)
+
+    def running_autos(self):
         with self.connect() as con:
-            return [dict(row) for row in con.execute(
-                "SELECT m.*, p.name FROM project_modes m JOIN projects p ON p.id=m.project_id WHERE m.mode='cruise' AND p.archived_at IS NULL")]
+            return [{**dict(row), "running": True} for row in con.execute(
+                """SELECT a.*, p.name FROM auto_continue a JOIN projects p ON p.id=a.project_id
+                WHERE a.stopped_at IS NULL AND p.archived_at IS NULL""")]
+
+    def failed_since(self, project_id, since):
+        """The newest prompt in the project that failed or was cancelled after ``since``, if any."""
+        with self.connect() as con:
+            row = con.execute("""SELECT * FROM dispatches WHERE project_id=? AND status='failed' AND requested_at>=?
+                ORDER BY id DESC LIMIT 1""", (project_id, since)).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def _prompted(con, project_id, turn_key):
+        return con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND after_turn=? AND status IN ('queued','delivered')""",
+                           (project_id, turn_key)).fetchone() is not None
+
+    def prompted(self, project_id, turn_key):
+        """Whether a prompt sent since this turn was the project's latest is on its way or delivered.
+
+        A failed or cancelled one does not count: a run stops on a failure
+        during it (``failed_since``), and a run started afterwards tries again.
+        """
+        with self.connect() as con:
+            return self._prompted(con, project_id, turn_key)
 
     def set_limits(self, agent, reading):
         """Keep an agent's latest plan-limit reading."""

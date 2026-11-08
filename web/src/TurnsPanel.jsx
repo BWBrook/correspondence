@@ -44,7 +44,11 @@ function ClampedBody({ text }) {
 
 function LimitReading({ agent, reading }) {
   if (!reading) return null;
-  const parts = reading.windows.map((w) => `${w.label} ${Math.round(w.percent)}%`);
+  const parts = reading.windows.map((w) =>
+    w.resets_at && Date.parse(w.resets_at) <= Date.now()
+      ? `${w.label} reset since`
+      : `${w.label} ${Math.round(w.percent)}%`,
+  );
   if (reading.credits != null)
     parts.push(`${Math.round(reading.credits).toLocaleString()} credits`);
   const resets = reading.windows

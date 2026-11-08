@@ -8,9 +8,9 @@ finished, copy its closing message into the other agent's chat and write
 ## Principles
 
 - **The user holds the throttle and the brake.** A prompt reaches an agent when
-  the user presses Send in the browser, or within a cruise the user started and
-  bounded. Hold stops everything. Agents have no tool that wakes another agent:
-  they only say who should go next.
+  the user presses Send in the browser, or within an auto-continue run the user
+  started and bounded, which Stop ends at once. Agents have no tool that wakes
+  another agent: they only say who should go next.
 - **Show, don't summarise.** The board shows each agent's closing message as
   written. It adds no model calls of its own, and so no third opinion.
 - **Plain substrates.** Turns are lines in a JSONL file and dispatches are rows
@@ -52,6 +52,13 @@ finished, copy its closing message into the other agent's chat and write
    prompt delivered, later ones say only "Claude replied on <time>, closing
    with:" and the quote, and the messenger's relay note shrinks to one line. The board records
    each send and later marks it Answered when that session's next turn appears.
+   Each agent has at most one prompt on its way at a time. The user can cancel
+   a prompt until a messenger or courier picks it up. A picked-up prompt is
+   never handed out again, because it may have been delivered with only its
+   report lost; if no outcome arrives within two minutes, the user can give up
+   on it, which marks it failed and frees the agent for the next prompt.
+   Changing a main session withdraws the prompts still waiting for the old one,
+   and archiving a project withdraws all of its waiting prompts.
 5. **Delivery.**
    - Codex: `codex queue --thread <thread> --message <text>`. The Codex desktop
      app watches its queue and runs the turn. The command's warning about a
@@ -60,8 +67,10 @@ finished, copy its closing message into the other agent's chat and write
      session on Haiku at low effort with its working directory in
      `messenger/`, keeps `correspondence-dispatch wait` running in the
      background. That command holds each prompt until the target session is
-     idle, so a board prompt always starts the next turn, as Codex's queue does;
-     steering inside a running turn belongs in the agent's own app. It then
+     running and idle, so a board prompt always starts the next turn, as Codex's
+     queue does; steering inside a running turn belongs in the agent's own app.
+     A prompt to a session that is not running, for example after the app
+     restarted, waits until the user opens it again. It then
      claims each waiting prompt once, looks up the
      target session's current name in Claude Code's session records, prints
      the prompt under a one-line note ("relayed from the user … answer here in your
@@ -90,7 +99,8 @@ finished, copy its closing message into the other agent's chat and write
      few seconds it reads the machine's pins and reports whether each pinned
      Claude session is running and idle, which also tells the board the
      courier is online. It queues waiting Codex prompts with the local
-     `codex queue` and records Codex turns as above. On `wsl` it must write to
+     `codex queue` and records Codex turns as above. If the board connection
+     drops after a delivery, the courier reports the outcome on its next round. On `wsl` it must write to
      the Codex app's queue database (`CODEX_SQLITE_HOME=~/.codex/sqlite`).
      A session appears on the board only once it has a recorded turn, so a
      new one is introduced with `--announce <project>=<id>`, which sends the
@@ -138,20 +148,28 @@ next. All four are live.
   Each turn shows its output tokens (hover for the rest); the turns view shows
   the latest plan limits for both agents and today's tokens per agent, for one
   project or all of them.
-- **3d. Hold and Cruise.** Each project has a mode, chosen in its Next turn box.
-  - **Manual** (the default): prompts go only when the user presses Send.
-  - **Hold** cancels the project's prompts that no messenger or courier has
-    picked up and refuses new sends until the user releases it.
-  - **Cruise** takes a number of hand-offs (1–50) and a ceiling (10–100% of
-    any plan limit). Every few seconds the board checks each cruising
-    project: when the latest turn from a main session declares
-    `Next: Claude` or `Next: Codex` and nothing has been sent since, the board
-    sends that turn's Continue prompt to the named agent, as Send would, and
-    marks it `cruise` in the send list. If the latest turn already names an
-    agent when the cruise starts, the first hand-off goes at once. A cruise
-    returns the project to Manual, showing why, when the hand-offs are used
-    up; when a turn declares `Next: User`, declares nothing, or names its own
-    agent; when a prompt sent during the cruise fails; when any plan-limit
-    reading reaches the ceiling; or when a main session is unpinned. The user
-    can stop it at any time with Manual or Hold. Turns from advisor sessions
-    never drive a cruise.
+- **3d. Auto-continue.** The Next turn box offers "Auto-continue for N
+  hand-offs (1–50), stop at X% of any plan limit (10–100)", and Stop while a
+  run is going. Every few seconds the board checks each running project: when
+  the latest turn from a main session declares `Next: Claude` or `Next: Codex`,
+  no prompt has been sent since that turn arrived and none in the project is
+  still on its way, the board sends that turn's Continue prompt to the named
+  agent, as Send would, and marks it `auto` in the send list. If the latest
+  turn already names an agent when the run starts, the first hand-off goes at
+  once. A run stops, showing why, when the hand-offs are used up; when a turn
+  declares `Next: User`, declares nothing, or names its own agent; when a
+  prompt sent during the run fails or is cancelled; when any current
+  plan-limit reading reaches the ceiling (a window that has reset since it was
+  read no longer counts); when a main session is unpinned; or when the user
+  presses Stop. Stopping withdraws the run's prompts not yet picked up, and a
+  run started afterwards tries that turn again. One run goes at a time. Turns
+  from advisor sessions never drive a run.
+
+  Each prompt records which turn was the project's latest when it was sent, and
+  a run tests that record, not timestamps, so machines whose clocks disagree
+  cannot make it send twice. A run spends a hand-off in the same database
+  transaction that records the prompt, and only while it is still going, so a
+  Stop cannot be overtaken by a send decided a moment before. A first version
+  (7 November 2026) had three modes, Manual, Hold and Cruise. Hold only
+  cancelled waiting prompts and blocked Send, which Cancel and Stop already
+  cover, so the switch became one control.

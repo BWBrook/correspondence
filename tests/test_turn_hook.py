@@ -73,11 +73,14 @@ def test_forward_spools_while_the_board_is_unreachable_then_flushes(tmp_path):
     assert lines[0]["machine"] == "wsl" and (local / "turns-spool.jsonl").read_text() == ""
 
 
-def test_append_rejects_lines_that_are_not_turns(tmp_path):
+def test_append_drops_lines_that_are_not_turns_without_holding_back_the_rest(tmp_path):
     env = {"PATH": "/usr/bin:/bin", "CORRESPONDENCE_DATA_DIR": str(tmp_path)}
-    bad = subprocess.run([sys.executable, "-m", "correspondence.turn_hook", "--append"], input='{"agent": "Mallory"}\n',
-                         text=True, capture_output=True, env=env)
-    assert bad.returncode != 0 and not (tmp_path / "turns.jsonl").exists()
+    good = json.dumps({"recorded_at": "2026-11-06T01:00:00+00:00", "agent": "Codex", "project": "p", "message": "m"})
+    spool = f'{{"agent": "Mallory"}}\n{{"recorded_at": "2026-11-06T00:59\n{good}\n'  # a forged line, then one torn by a crash
+    result = subprocess.run([sys.executable, "-m", "correspondence.turn_hook", "--append"], input=spool,
+                            text=True, capture_output=True, env=env)
+    assert result.returncode == 0 and result.stderr.count("dropped") == 2
+    assert [json.loads(l)["message"] for l in (tmp_path / "turns.jsonl").read_text().splitlines()] == ["m"]
 
 
 def test_resent_lines_are_shown_once(tmp_path):

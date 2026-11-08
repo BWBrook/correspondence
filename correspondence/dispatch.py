@@ -1,8 +1,9 @@
 """Deliver a prompt the user sent from the board to a project's main agent session.
 
-Dispatch starts from a browser request, or from a cruise the user started in
-the browser (see ``cruise``); agents have no tool that creates one. On the board's host, Codex prompts go straight into the Codex queue for the
-pinned thread, which the Codex desktop app picks up and runs. Claude prompts
+Dispatch starts from a browser request, or from an auto-continue run the user
+started in the browser (see ``autocontinue``); agents have no tool that creates
+one. On the board's host, Codex prompts go straight into the Codex queue for
+the pinned thread, which the Codex desktop app picks up and runs. Claude prompts
 wait in the board until the Board Messenger, a Claude session on the same
 machine as the target, collects them::
 
@@ -14,10 +15,10 @@ machine as the target, collects them::
 After each relay the messenger also passes the Claude app's usage report to
 ``limits``, because Claude's plan limits are visible only inside the app.
 
-``wait`` holds each prompt until its target session is idle, so a board prompt
-starts the next turn instead of landing inside a running one, as with Codex's
-queue. It prints one JSON line per prompt: ``{"dispatch", "to", "project",
-"message"}``, where ``to`` is the target session's current name in the Claude
+``wait`` holds each prompt until its target session is running and idle, so a
+board prompt starts the next turn instead of landing inside a running one, as
+with Codex's queue, and a prompt to a session that is not running waits for it.
+It prints one JSON line per prompt: ``{"dispatch", "to", "project", "message"}``, where ``to`` is the target session's current name in the Claude
 app, read from Claude Code's session records, and ``message`` is the user's text
 under a one-line note telling the recipient to answer in its own conversation
 rather than reply to the messenger. A session that has already had a board
@@ -75,6 +76,20 @@ def deliver_codex(session_id: str, body: str) -> tuple[bool, str]:
         return False, f"{type(error).__name__}: {error}"
     detail = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
     return result.returncode == 0, detail
+
+
+def deliver_here(store, dispatch: dict) -> dict:
+    """Queue a Codex prompt pinned on the board's own host and record the outcome.
+
+    The prompt is claimed first, as a courier or messenger would, so a Cancel
+    pressed during delivery cannot mark a delivered prompt as cancelled.
+    Prompts for Claude, or for another machine, wait for their messenger or
+    courier and are returned unchanged.
+    """
+    if dispatch["target"] != "Codex" or dispatch["machine"] is not None or not store.claim_dispatch(dispatch["id"]):
+        return dispatch
+    delivered, detail = deliver_codex(dispatch["session_id"], dispatch["body"])
+    return store.finish_dispatch(dispatch["id"], delivered, detail)
 
 
 def _alive(pid) -> bool:
@@ -263,13 +278,12 @@ def relay_note(dispatch: dict) -> str:
 
 def collect(board) -> list[dict]:
     """Claim the waiting prompts whose target session is idle, so a board prompt
-    always starts the next turn and never lands inside a running one."""
+    always starts the next turn and never lands inside a running one. A prompt
+    to a session that is not running waits until the user starts it again."""
     ready = []
     for dispatch in board.waiting("Claude"):
         session = claude_session(dispatch["session_id"])
-        if session is None:
-            board.finish(dispatch["id"], False, "The main Claude session is not running on its machine")
-        elif session.get("status") == "idle" and board.claim(dispatch["id"]):
+        if session is not None and session.get("status") == "idle" and board.claim(dispatch["id"]):
             ready.append({"dispatch": dispatch["id"], "to": session["name"],
                           "project": dispatch["project_id"],
                           "message": f"{relay_note(dispatch)}\n\n{dispatch['body']}"})
@@ -334,7 +348,10 @@ def main() -> None:
             sys.exit(f"Limits not recorded: {error}")
         print("Claude limits: " + ", ".join(f"{w['label']} {w['percent']:g}%" for w in reading["windows"]))
     else:
-        status = board.finish(args.dispatch, args.outcome == "delivered", args.detail)
+        try:
+            status = board.finish(args.dispatch, args.outcome == "delivered", args.detail)
+        except (ValueError, RuntimeError) as error:
+            sys.exit(f"Outcome not recorded: {error}")
         if status != args.outcome:
             sys.exit(f"Dispatch {args.dispatch} was already {status}")
         print(f"Dispatch {args.dispatch} {args.outcome}.")

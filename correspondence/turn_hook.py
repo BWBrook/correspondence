@@ -145,13 +145,19 @@ def flush(directory: Path, command: str) -> None:
 
 
 def receive(stream, directory: Path) -> int:
+    """Append the forwarded turn records; report and drop any other line, such as one torn by a crash,
+    so that one bad line cannot hold back every turn spooled after it."""
     lines = []
     for raw in stream:
         if not raw.strip():
             continue
-        entry = json.loads(raw)
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            entry = None
         if not (isinstance(entry, dict) and entry.get("recorded_at") and entry.get("agent") in AGENTS and entry.get("project")):
-            raise ValueError(f"not a turn record: {raw[:200]!r}")
+            print(f"dropped a line that is not a turn record: {raw[:200]!r}", file=sys.stderr)
+            continue
         lines.append(json.dumps(entry, ensure_ascii=False))
     if lines:
         append_lines(lines, directory)

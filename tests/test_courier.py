@@ -122,6 +122,29 @@ def test_codex_prompts_for_this_machine_are_queued_locally(world):
     assert status == {mine["id"]: "delivered", theirs["id"]: "queued"}
 
 
+def test_a_delivery_whose_report_is_lost_is_reported_next_round(world, monkeypatch):
+    monkeypatch.setenv("CORRESPONDENCE_CODEX", world["env"]["CORRESPONDENCE_CODEX"])
+    store = world["store"]
+    sent = store.create_dispatch("project", "Codex", "Continue, please.")
+
+    class Dropping(LocalBoard):
+        drops = 1
+
+        def finish(self, *args):
+            if self.drops:
+                self.drops -= 1
+                raise ConnectionError("board connection closed or timed out")
+            return super().finish(*args)
+
+    board, unreported = Dropping(store, "wsl"), {}
+    with pytest.raises(ConnectionError):
+        courier.exchange(board, lambda text: None, unreported)
+    assert store.list_dispatches("project", 1)[0]["status"] == "queued" and sent["id"] in unreported
+    courier.exchange(board, lambda text: None, unreported)
+    assert store.list_dispatches("project", 1)[0]["status"] == "delivered" and unreported == {}
+    assert (world["tmp"] / "codex-args").read_text().count("queue") == 1  # delivered once, reported once
+
+
 def test_courier_reports_claude_sessions_and_its_own_presence(world):
     board = world["board"]
     assert courier_online(board, "wsl") is False

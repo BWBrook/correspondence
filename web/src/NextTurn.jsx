@@ -8,6 +8,8 @@ export function continuePrompt(turn, primed) {
   return primed ? turn.continue_prompts.short : turn.continue_prompts.full;
 }
 
+const STALE_CLAIM_MS = 120000;
+
 function dispatchState(d, live) {
   const carrier = d.target === "Codex" ? "courier" : "messenger";
   const where = d.machine ? `the ${d.machine} ${carrier}` : `the ${carrier}`;
@@ -15,84 +17,75 @@ function dispatchState(d, live) {
   if (d.answered_at) return `Answered ${shortTime(d.answered_at)}`;
   if (d.status === "delivered") return "Delivered, waiting for a reply";
   if (d.claimed_at) return `Handed to ${where}`;
-  if (d.target === "Claude" && live && live.status !== "idle")
+  if (d.target === "Claude" && !live)
+    return "Waiting for the Claude session to start";
+  if (d.target === "Claude" && live.status !== "idle")
     return `Waiting for ${live.name} to finish its turn`;
   return `Waiting for ${where}`;
 }
 
-function modeStatus(mode) {
-  if (mode.mode === "cruise")
-    return `Cruising: ${mode.hops_left} ${mode.hops_left === 1 ? "hand-off" : "hand-offs"} left; stops at ${mode.ceiling}% of any plan limit, or when an agent hands to you.`;
-  if (mode.mode === "hold") return "On hold: no prompts go out until you release it.";
-  if (mode.stopped_reason)
-    return `Last cruise stopped ${shortTime(mode.stopped_at)}: ${mode.stopped_reason}.`;
-  return "Prompts go only when you press Send.";
+function cancellable(d) {
+  if (d.status !== "queued") return null;
+  if (!d.claimed_at) return "Cancel";
+  return Date.now() - Date.parse(d.claimed_at) >= STALE_CLAIM_MS ? "Give up" : null;
 }
 
-function ModeControl({ projectId, mode, onChange }) {
-  const [choosing, setChoosing] = useState(false);
+function autoStatus(auto) {
+  if (auto.running)
+    return `Auto-continue: ${auto.hops_left} ${auto.hops_left === 1 ? "hand-off" : "hand-offs"} left; stops at ${auto.ceiling}% of any plan limit, or when an agent hands to you.`;
+  if (auto.stopped_reason)
+    return `Auto-continue stopped ${shortTime(auto.stopped_at)}: ${auto.stopped_reason}.`;
+  return "Prompts go when you press Send.";
+}
+
+function AutoControl({ projectId, auto, onChange }) {
   const [hops, setHops] = useState(6);
   const [ceiling, setCeiling] = useState(80);
   const [error, setError] = useState("");
-  async function change(body) {
+  const [busy, setBusy] = useState(false);
+  async function change(path, body) {
     setError("");
+    setBusy(true);
     try {
-      onChange(await post(`/projects/${encodeURIComponent(projectId)}/mode`, body));
-      setChoosing(false);
+      onChange(await post(`/projects/${encodeURIComponent(projectId)}/${path}`, body));
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusy(false);
     }
   }
-  const current = choosing ? "cruise" : mode.mode;
   return (
-    <div className="mode-control">
-      <div className="segmented" role="group" aria-label="Mode">
-        {[
-          ["manual", "Manual", "Prompts go only when you press Send"],
-          ["hold", "Hold", "Cancel prompts not yet picked up and block sends"],
-          ["cruise", "Cruise", "Let the board pass each turn to the agent it names"],
-        ].map(([value, label, title]) => (
+    <div className="auto-control">
+      {auto.running ? (
+        <button className="outline" disabled={busy} onClick={() => change("auto/stop", {})}>
+          Stop
+        </button>
+      ) : (
+        <span className="auto-form">
           <button
-            key={value}
-            className={current === value ? "active" : ""}
-            aria-pressed={current === value}
-            title={title}
-            onClick={() =>
-              value === "cruise"
-                ? setChoosing(mode.mode !== "cruise")
-                : change({ mode: value })
-            }
+            disabled={busy}
+            onClick={() => change("auto", { hops, ceiling })}
+            title="Send each turn's Continue prompt to the agent it names, without waiting for Send"
           >
-            {label}
+            Auto-continue
           </button>
-        ))}
-      </div>
-      {choosing ? (
-        <span className="cruise-form">
           <label>
-            Hand-offs{" "}
+            for{" "}
             <input type="number" min={1} max={50} value={hops}
-              onChange={(e) => setHops(Number(e.target.value))} />
+              onChange={(e) => setHops(Number(e.target.value))} />{" "}
+            hand-offs,
           </label>
           <label>
-            Stop at{" "}
+            stop at{" "}
             <input type="number" min={10} max={100} value={ceiling}
               onChange={(e) => setCeiling(Number(e.target.value))} />
             % of any plan limit
           </label>
-          <button onClick={() => change({ mode: "cruise", hops, ceiling })}>
-            Start cruise
-          </button>
-          <button className="text-button" onClick={() => setChoosing(false)}>
-            Cancel
-          </button>
-          <span className="hint">
-            If the last turn names Claude or Codex, the first hand-off goes now.
-          </span>
         </span>
-      ) : (
-        <span className={`hint mode-status ${mode.mode}`}>{modeStatus(mode)}</span>
       )}
+      <span className={`hint auto-status${auto.running ? " running" : ""}`}>
+        {autoStatus(auto)}
+      </span>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -100,10 +93,6 @@ function ModeControl({ projectId, mode, onChange }) {
       )}
     </div>
   );
-}
-
-function machineName(machine) {
-  return machine || "the Mac mini";
 }
 
 function MainSessions({ projectId, agents, onChange }) {
@@ -168,7 +157,7 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
     sessions: [],
   });
   const [dispatches, setDispatches] = useState([]);
-  const [mode, setMode] = useState({ mode: "manual" });
+  const [auto, setAuto] = useState({ running: false });
   const [text, setText] = useState("");
   const [edited, setEdited] = useState(false);
   const [sending, setSending] = useState(null);
@@ -195,8 +184,8 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
       api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
         .then((d) => live && setDispatches(d))
         .catch(() => {});
-      api(`/projects/${encodeURIComponent(projectId)}/mode`)
-        .then((m) => live && setMode(m))
+      api(`/projects/${encodeURIComponent(projectId)}/auto`)
+        .then((a) => live && setAuto(a))
         .catch(() => {});
     };
     load();
@@ -209,20 +198,20 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
     };
   }, [projectId]);
   const pending = dispatches.some((d) => d.status === "queued");
-  const cruising = mode.mode === "cruise";
+  const running = auto.running;
   useEffect(() => {
-    if (!pending && !cruising) return undefined;
+    if (!pending && !running) return undefined;
     const poll = setInterval(() => {
       api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
         .then(setDispatches)
         .catch(() => {});
-      if (cruising)
-        api(`/projects/${encodeURIComponent(projectId)}/mode`)
-          .then(setMode)
+      if (running)
+        api(`/projects/${encodeURIComponent(projectId)}/auto`)
+          .then(setAuto)
           .catch(() => {});
     }, 3000);
     return () => clearInterval(poll);
-  }, [pending, cruising, projectId]);
+  }, [pending, running, projectId]);
   async function cancel(id) {
     setError("");
     try {
@@ -252,14 +241,8 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
     }
   }
   function blocked(agent) {
-    if (mode.mode === "hold") return "This project is on hold.";
     if (!agents.pins[agent])
       return `Choose the main ${agent} session under Main sessions first.`;
-    const machine = agents.machines[agent];
-    if (agent === "Claude" && machine && !agents.couriers[machine])
-      return `${machine} is offline or its courier is not running.`;
-    if (agent === "Claude" && !agents.claude_live)
-      return `The main Claude session is not running on ${machineName(machine)}.`;
     return null;
   }
   return (
@@ -273,11 +256,11 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
           {declared && declared !== "User" && ` · asks for ${declared}`}
         </span>
       </header>
-      <ModeControl
+      <AutoControl
         projectId={projectId}
-        mode={mode}
+        auto={auto}
         onChange={(next) => {
-          setMode(next);
+          setAuto(next);
           api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
             .then(setDispatches)
             .catch(() => {});
@@ -315,7 +298,7 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
             Claude{agents.machines.Claude ? ` on ${agents.machines.Claude}` : ""}:{" "}
             {agents.claude_live
               ? `${agents.claude_live.name} · ${agents.claude_live.status || "running"}`
-              : "session not running"}{" "}
+              : "session not running, so prompts wait"}{" "}
             ·{" "}
             {agents.messenger_listening
               ? "messenger listening"
@@ -353,13 +336,13 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
             <li key={d.id} className={d.status}>
               <span>
                 To {d.target} · {shortTime(d.requested_at)}
-                {d.origin === "cruise" && <span className="cruise-tag">cruise</span>}
+                {d.origin === "auto" && <span className="auto-tag">auto</span>}
               </span>
               <span>
                 {dispatchState(d, agents.claude_live)}
-                {d.status === "queued" && !d.claimed_at && (
+                {cancellable(d) && (
                   <button className="text-button" onClick={() => cancel(d.id)}>
-                    Cancel
+                    {cancellable(d)}
                   </button>
                 )}
               </span>
