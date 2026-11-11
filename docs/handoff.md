@@ -46,6 +46,11 @@ finished, copy its closing message into the other agent's chat and write
 3. **Main sessions.** Each project pins one Claude session and one Codex thread.
    Other sessions in the same folder, such as read-only advisors or scheduled
    automations, still log turns, but they are greyed and are never woken.
+   The Claude app sometimes reopens a conversation under a new session id
+   (seen 11 November 2026 with EPRP Workspace), which leaves the pin on a
+   session that no longer runs. When the pinned Claude session is not running
+   and a newer Claude session is recording turns in the project, the Next turn
+   box offers to make that one main.
 4. **Next turn.** The composer is prefilled with a Continue prompt that quotes
    the latest closing message, and the user edits it to steer. The first prompt
    to a session explains where it comes from. Once a session has had a board

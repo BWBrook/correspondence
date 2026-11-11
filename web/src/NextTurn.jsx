@@ -95,6 +95,17 @@ function AutoControl({ projectId, auto, onChange }) {
   );
 }
 
+function newerSession(agents, agent) {
+  const pinned = agents.sessions.find((s) => s.session_id === agents.pins[agent]);
+  return agents.sessions.find(
+    (s) =>
+      s.agent === agent &&
+      !s.automation &&
+      s.session_id !== agents.pins[agent] &&
+      (!pinned || s.last_at > pinned.last_at),
+  );
+}
+
 function MainSessions({ projectId, agents, onChange }) {
   const [error, setError] = useState("");
   async function pin(agent, session_id) {
@@ -212,6 +223,17 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
     }, 3000);
     return () => clearInterval(poll);
   }, [pending, running, projectId]);
+  async function repin(agent, session_id) {
+    setError("");
+    try {
+      setAgents(
+        await post(`/projects/${encodeURIComponent(projectId)}/agents`, { agent, session_id }),
+      );
+      onPinsChanged();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
   async function cancel(id) {
     setError("");
     try {
@@ -303,6 +325,16 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
             {agents.messenger_listening
               ? "messenger listening"
               : "messenger not listening, so prompts wait"}
+          </span>
+        )}
+        {agents.pins.Claude && !agents.claude_live && newerSession(agents, "Claude") && (
+          <span className="your-call" role="status">
+            A newer Claude session ({newerSession(agents, "Claude").session_id.slice(0, 8)},
+            last turn {shortTime(newerSession(agents, "Claude").last_at)}) is recording
+            turns here, perhaps the same conversation reopened.{" "}
+            <button className="text-button" onClick={() => repin("Claude", newerSession(agents, "Claude").session_id)}>
+              Make it main
+            </button>
           </span>
         )}
         {agents.pins.Codex && agents.machines.Codex && (
