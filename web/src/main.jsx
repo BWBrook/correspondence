@@ -31,6 +31,7 @@ import {
 } from "./api";
 import { CreateForm, UnreadCounts } from "./components";
 import { ProjectArchiveDialog } from "./ProjectArchiveDialog";
+import { ProjectRenameDialog } from "./ProjectRenameDialog";
 import { ThreadReader } from "./ThreadReader";
 import { SearchDialog } from "./SearchDialog";
 import { TurnsPanel } from "./TurnsPanel";
@@ -128,6 +129,7 @@ function Board({ route, navigate }) {
   const markingAllRef = useRef(false);
   const [modal, setModal] = useState(null),
     [error, setError] = useState("");
+  const [renameDialog, setRenameDialog] = useState(null);
   const [archiveDialog, setArchiveDialog] = useState(null),
     [restoring, setRestoring] = useState(false),
     [projectNotice, setProjectNotice] = useState(null);
@@ -522,6 +524,14 @@ function Board({ route, navigate }) {
               <Plus size={17} /> New discussion
             </button>
           )}
+          {!archived && project && (
+            <button
+              className="text-button project-archive-action"
+              onClick={() => setRenameDialog(project)}
+            >
+              Rename project…
+            </button>
+          )}
           {project && (
             <button
               className="text-button project-archive-action"
@@ -660,6 +670,16 @@ function Board({ route, navigate }) {
           projectId={projectId}
           close={() => setModal(null)}
           onCreated={created}
+        />
+      )}
+      {renameDialog && (
+        <ProjectRenameDialog
+          project={renameDialog}
+          close={() => setRenameDialog(null)}
+          onRenamed={async () => {
+            setRenameDialog(null);
+            await refreshProjects();
+          }}
         />
       )}
       {archiveDialog && (

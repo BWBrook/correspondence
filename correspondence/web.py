@@ -32,6 +32,11 @@ class ProjectState(Payload):
     expected_state: str
 
 
+class ProjectRename(Payload):
+    name: str
+    expected_state: str
+
+
 class ProjectCreate(Payload):
     id: str
     name: str
@@ -144,6 +149,10 @@ def create_app(data_dir=None, dist_dir=None):
     @app.post("/api/projects/{project_id}/archive")
     def archive_project(project_id: str, payload: ProjectState):
         return store().archive_project(project_id, payload.expected_state)
+
+    @app.post("/api/projects/{project_id}/rename")
+    def rename_project(project_id: str, payload: ProjectRename):
+        return store().rename_project(project_id, payload.name, payload.expected_state)
 
     @app.post("/api/projects/{project_id}/restore")
     def restore_project(project_id: str, payload: ProjectState):

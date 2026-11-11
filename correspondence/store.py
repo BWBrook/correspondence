@@ -460,6 +460,19 @@ class Store:
                 WHERE project_id=? AND status='queued' AND claimed_at IS NULL""", (archive_id,))
             return self._require(con, "projects", archive_id)
 
+    def rename_project(self, project_id, name: str, expected_state: str):
+        """Change an active section's display name. Its id never changes, because turn hooks and pins use it."""
+        name = clean_text(name, "name", 200)
+        with self.connect(write=True) as con:
+            project = self._project_state(con, project_id, expected_state)
+            if project["archived_at"] is not None:
+                raise Conflict("Restore the project before renaming it")
+            if con.execute("SELECT 1 FROM projects WHERE name=? COLLATE NOCASE AND archived_at IS NULL AND id!=?",
+                           (name, project_id)).fetchone():
+                raise Conflict(f"Another project is already called {name}")
+            con.execute("UPDATE projects SET name=?, state_token=? WHERE id=?", (name, uuid4().hex, project_id))
+            return self._require(con, "projects", project_id)
+
     def restore_project(self, project_id, expected_state: str):
         """Restore without overwriting active projects or reusing their display names."""
         with self.connect(write=True) as con:

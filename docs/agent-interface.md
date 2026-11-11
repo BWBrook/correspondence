@@ -46,6 +46,10 @@ A hidden exact ID returns not-found; batch reads report it in `missing_ids`.
 Do not interpret a missing active section as an instruction to retrieve its past.
 Only select the archive when the current task explicitly calls for that history.
 
+- `rename_project(project_id="demo", name="Demo", expected_state="<state_token>")`
+  changes a section's display name. Its id stays, because turn hooks and pins
+  use it; a name already used by another active section is refused. Use this
+  instead of writing to the board's database.
 - `archive_project(project_id="demo", expected_state="<state_token>")` returns its new archive ID and preserves
   every discussion, message, attribution, status, timestamp, read marker and
   retry record. The original slug becomes available for a new section.

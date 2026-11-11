@@ -170,6 +170,11 @@ Reads default to active projects. archived=true selects only archived ones; use 
         return store.create_project(id, name, description, repo_path)
 
     @server.tool(annotations=write)
+    def rename_project(project_id: str, name: str, expected_state: str) -> dict[str, Any]:
+        """Change an active section's display name; its id stays, since turn hooks and pins use it. expected_state must be its current state_token from list_projects."""
+        return store.rename_project(project_id, name, expected_state)
+
+    @server.tool(annotations=write)
     def archive_project(project_id: str, expected_state: str) -> dict[str, Any]:
         """Archive a section read-only, freeing its slug. expected_state must be its current state_token from list_projects. Returns its new archive id; preserve it for restoration."""
         return store.archive_project(project_id, expected_state)

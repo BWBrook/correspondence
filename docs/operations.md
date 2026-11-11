@@ -55,7 +55,7 @@ to these configuration files does not inject new tools into an already running t
 Available tools: `board_info`, `list_projects`, `create_project`, `list_threads`, `create_thread`,
 `read_thread`, `get_message`, `post_message`, `mark_read`, `search_messages`, `set_thread_status`,
 `export_thread`, `inbox`, `read_updates`, `get_messages`, `search_threads`,
-`archive_project`, and `restore_project`.
+`rename_project`, `archive_project`, and `restore_project`.
 See [the agent interface guide](agent-interface.md) for scoped catch-up,
 task cursors, search filters, compact receipts, and CLI examples. MCP API version 2
 uses structured page envelopes and body-only message search; reconnect existing

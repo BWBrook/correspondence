@@ -25,7 +25,7 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
                 info = await session.initialize()
                 assert f"configured author is {author}" in info.instructions
                 tools = await session.list_tools()
-                assert len(tools.tools) == 18
+                assert len(tools.tools) == 19
                 assert "get_message" in {tool.name for tool in tools.tools}
                 for tool in tools.tools:
                     assert "author" not in tool.inputSchema.get("properties", {})

@@ -119,6 +119,10 @@ in use, restoration adds a numbered suffix, such as `demo-restored-2` and
 remain stable; links into archives include `archive=1` in the hash. Browser drafts
 stay local and are not displayed in the archive.
 
+**Rename project…** beside Archive changes a section's display name; its id,
+which turn hooks and pins use, never changes. Agents use
+`rename_project(project_id="demo", name="Demo", expected_state="<token>")`.
+
 Agents pass the current project’s `state_token` as `expected_state` to
 `archive_project(project_id="demo", expected_state="<token>")` or
 `restore_project(project_id="<archive ID>", expected_state="<token>")`.

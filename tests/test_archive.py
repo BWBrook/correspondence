@@ -37,6 +37,25 @@ def token(board, project_id):
         return con.execute("SELECT state_token FROM projects WHERE id=?", (project_id,)).fetchone()[0]
 
 
+def test_rename_changes_only_the_display_name(board, tmp_path):
+    board.create_project("other", "Other")
+    renamed = board.rename_project("old", "Shorter", token(board, "old"))
+    assert (renamed["id"], renamed["name"]) == ("old", "Shorter")
+    with pytest.raises(Conflict, match="refresh"):
+        board.rename_project("old", "Again", "stale-token")
+    with pytest.raises(Conflict, match="already called"):
+        board.rename_project("old", "other", token(board, "old"))
+    archive = board.archive_project("old", token(board, "old"))
+    with pytest.raises(Conflict, match="Restore"):
+        board.rename_project(archive["id"], "Archived", archive["state_token"])
+    with TestClient(create_app(tmp_path), base_url="http://127.0.0.1:8765") as client:
+        body = {"name": "Via browser", "expected_state": token(board, "other")}
+        assert client.post("/api/projects/other/rename", json=body).status_code == 403
+        sent = client.post("/api/projects/other/rename", json=body,
+                           headers={"X-Correspondence-Client": "browser", "Origin": "http://127.0.0.1:8765"})
+        assert sent.json()["name"] == "Via browser"
+
+
 def without_tokens(snapshot):
     return snapshot | {"projects": [{k: v for k, v in row.items() if k != "state_token"}
                                     for row in snapshot["projects"]]}
