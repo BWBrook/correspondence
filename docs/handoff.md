@@ -32,8 +32,8 @@ finished, copy its closing message into the other agent's chat and write
    the thread, so a thread already open when the file is added never runs the
    hook, even after approval. Seen on 7 November 2026 (Codex app with CLI
    0.166): a new session in the same folder ran it, the open thread did not.
-   Install the hook before starting the thread, or restart the Codex app once
-   afterwards.
+   Install and approve the hook before starting the thread, or restart the
+   Codex app once afterwards.
 
    The Codex Windows app runs no hooks, even approved ones, so on such a
    machine the courier (see 6) records Codex turns from each pinned thread's
@@ -110,7 +110,12 @@ finished, copy its closing message into the other agent's chat and write
      A session appears on the board only once it has a recorded turn, so a
      new one is introduced with `--announce <project>=<id>`, which sends the
      latest turn of that Codex thread or Claude session once and makes it
-     available to pin. Codex compresses older rollout files to `.jsonl.zst`;
+     available to pin. The board's own host runs no courier; there, build the
+     record with the courier's `scan` and `turn_record`, drop `machine`, and
+     pipe it to `correspondence-turn-hook --append`. dSDM needed this on
+     12 November 2026: its Codex thread's only turn came before the hook was
+     approved, so there was nothing to pin and no way to send a first prompt.
+     Codex compresses older rollout files to `.jsonl.zst`;
      the courier reads those too, and after a file is replaced it sends only
      turns completed after the last one it saw.
    - **Messenger.** The machine runs its own Board Messenger with the same
