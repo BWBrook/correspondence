@@ -1,13 +1,28 @@
 #!/usr/bin/env python3
-"""Create a checked SQLite snapshot; retain 30 days of automatic backups."""
+"""Create a checked SQLite snapshot; retain 30 days of automatic backups; copy them off the host.
+
+Off-host copies go to each destination listed, one per line, in the data
+directory's ``offsite-backup`` file: ``host:/path`` for a machine reached over
+SSH, or a local path. The file stays out of the repository because it names
+machines. Each automatic run sends a gzipped copy of the new snapshot and of
+the turn ledger (``turns.jsonl``, which is not in the database), then removes
+copies older than 30 days from that destination. A destination that cannot be
+reached is reported and retried with the next day's snapshot.
+"""
 import argparse
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import fcntl
+import gzip
 import os
 from pathlib import Path
 import re
+import shlex
 import sqlite3
 import stat
+import subprocess
+import sys
+import tempfile
 
 
 STAMP = "%Y%m%dT%H%M%S%fZ"
@@ -69,12 +84,68 @@ def backup(directory: Path, destination: Path | None = None, *, now: datetime | 
     return destination
 
 
+RETAIN_DAYS = 30
+
+
+def destinations(directory: Path) -> list[str]:
+    path = directory / "offsite-backup"
+    if not path.is_file():
+        return []
+    return [line.strip() for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")]
+
+
+def _split(destination: str) -> tuple[str | None, str]:
+    """``host:/path`` names a machine reached over SSH; anything else is a local path."""
+    host, separator, path = destination.partition(":")
+    return (host, path) if separator and "/" not in host else (None, destination)
+
+
+def offsite(directory: Path, snapshot_path: Path, stamp: str) -> list[str]:
+    """Send gzipped copies of a snapshot and the turn ledger to each destination; return the failures."""
+    targets = destinations(directory)
+    if not targets:
+        return []
+    failures = []
+    with tempfile.TemporaryDirectory(dir=directory) as staging:
+        staged = [Path(staging) / f"board-{stamp}.sqlite3.gz", Path(staging) / f"turns-{stamp}.jsonl.gz"]
+        with open(snapshot_path, "rb") as source, gzip.open(staged[0], "wb", compresslevel=9) as target:
+            target.write(source.read())
+        ledger = directory / "turns.jsonl"
+        with open(ledger, "rb") if ledger.is_file() else open(os.devnull, "rb") as source:
+            fcntl.flock(source, fcntl.LOCK_SH)  # the turn hook appends under an exclusive lock
+            data = source.read()
+        with gzip.open(staged[1], "wb", compresslevel=9) as target:
+            target.write(data)
+        for path in staged:
+            path.chmod(0o600)
+        for destination in targets:
+            host, folder = _split(destination)
+            folder = shlex.quote(folder)
+            prepare = (f"mkdir -p {folder} && chmod 700 {folder} && find {folder} -maxdepth 1 -type f "
+                       f"\\( -name 'board-*.sqlite3.gz' -o -name 'turns-*.jsonl.gz' \\) -mtime +{RETAIN_DAYS} -delete")
+            shell = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", host, prepare] if host else ["sh", "-c", prepare]
+            for command in (shell, ["rsync", "-t", *map(str, staged), destination.rstrip("/") + "/"]):
+                result = subprocess.run(command, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+                if result.returncode != 0:
+                    failures.append(f"{destination}: {(result.stderr or result.stdout).strip()[-300:]}")
+                    break
+    return failures
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", nargs="?", type=Path)
     args = parser.parse_args()
     directory = Path(os.environ.get("CORRESPONDENCE_DATA_DIR", "~/Library/Application Support/Correspondence"))
-    print(backup(directory, args.destination))
+    now = datetime.now(timezone.utc)
+    result = backup(directory, args.destination, now=now)
+    print(result)
+    if args.destination is None:
+        failures = offsite(directory.expanduser().resolve(), result, now.strftime("%Y%m%dT%H%M%SZ"))
+        for line in failures:
+            print(f"Off-host copy failed: {line}", file=sys.stderr)
+        if failures:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

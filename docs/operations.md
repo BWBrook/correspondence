@@ -124,6 +124,19 @@ Custom destinations are never pruned; timestamp filenames in the default backup
 directory are reserved for automatic snapshots. Include the data directory in
 your normal machine backup.
 
+Each automatic snapshot is also copied off the host, so the board survives the
+loss of its machine. List destinations, one per line, in the data directory's
+`offsite-backup` file: `host:path` (reached with SSH and `rsync`; a relative
+path is under that user's home) or a local path. The file names machines, so
+it stays out of the repository. Each run sends
+`board-<UTC stamp>.sqlite3.gz` and `turns-<UTC stamp>.jsonl.gz` (the turn
+ledger, which is not in the database), creates the destination folder
+owner-only, and deletes that destination's copies older than 30 days. An
+unreachable destination, such as a sleeping laptop, is logged to
+`backup-error.log`, gives the job a non-zero exit status, and gets the next
+day's copy. To restore, decompress both files into a stopped board's data
+directory as `board.sqlite3` and `turns.jsonl`.
+
 Install the daily 03:15 local-time backup for the logged-in macOS user:
 
 ```sh

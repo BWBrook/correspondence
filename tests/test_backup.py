@@ -126,3 +126,25 @@ def test_missing_source_and_redirected_default_directory_are_refused(tmp_path, d
     with pytest.raises(ValueError, match="symlink"):
         backup.backup(database, now=NOW)
     assert list(outside.iterdir()) == []
+
+
+def test_offsite_copies_snapshot_and_ledger_prunes_old_copies_and_reports_failures(database, tmp_path_factory):
+    import gzip
+    import os
+    remote = tmp_path_factory.mktemp("remote")
+    stale = remote / "board-20260801T000000Z.sqlite3.gz"
+    stale.write_bytes(b"old")
+    os.utime(stale, (0, 0))
+    unrelated = remote / "notes.txt"
+    unrelated.write_text("kept")
+    os.utime(unrelated, (0, 0))
+    (database / "turns.jsonl").write_text('{"recorded_at": "2026-09-14T12:00:00+00:00"}\n')
+    blocked = database / "not-a-directory"
+    blocked.write_text("")
+    (database / "offsite-backup").write_text(f"# destinations\n{remote}\n{blocked}/sub\n")
+    snapshot = backup.backup(database, now=NOW)
+    failures = backup.offsite(database, snapshot, "20260914T120000Z")
+    assert len(failures) == 1 and failures[0].startswith(f"{blocked}/sub:")
+    assert gzip.decompress((remote / "board-20260914T120000Z.sqlite3.gz").read_bytes()) == snapshot.read_bytes()
+    assert gzip.decompress((remote / "turns-20260914T120000Z.jsonl.gz").read_bytes()) == (database / "turns.jsonl").read_bytes()
+    assert not stale.exists() and unrelated.exists()
