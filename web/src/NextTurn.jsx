@@ -174,7 +174,7 @@ function MainSessions({ pairId, agents, onChange }) {
   );
 }
 
-export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged }) {
+export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged, onStateChanged }) {
   const mounted = useMounted();
   const [agents, setAgents] = useState({
     pins: {},
@@ -188,6 +188,18 @@ export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged }) {
   const [edited, setEdited] = useState(false);
   const [sending, setSending] = useState(null);
   const [error, setError] = useState("");
+  const statusChanged = useRef(onStateChanged);
+  const previousStatus = useRef(null);
+  statusChanged.current = onStateChanged;
+  const statusKey = JSON.stringify([
+    auto.running, auto.stopped_at,
+    dispatches.map((d) => [d.id, d.status, d.answered_at]),
+  ]);
+  useEffect(() => {
+    if (previousStatus.current !== null && previousStatus.current !== statusKey)
+      statusChanged.current?.();
+    previousStatus.current = statusKey;
+  }, [statusKey]);
   const other = lastTurn
     ? AGENTS.find((agent) => agent !== lastTurn.agent)
     : null;
@@ -308,7 +320,7 @@ export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged }) {
       />
       {declared === "User" && (
         <p className="your-call" role="status">
-          Your call: {lastTurn.agent} handed this to you
+          {lastTurn.agent} handed the next turn to you
           {lastTurn.next.reason ? ` (${lastTurn.next.reason})` : ""}.
         </p>
       )}

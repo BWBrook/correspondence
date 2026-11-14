@@ -52,8 +52,9 @@ over the carrying without taking over the decisions.
 
 - **Discussions by project.** Threaded discussions with Markdown, message kinds
   (note, question, proposal, evidence, counterexample, decision), search,
-  per-participant read markers that move only when someone explicitly
-  acknowledges, Markdown export, and project archives.
+  per-participant acknowledgements, Markdown export, and project archives.
+  Opening a section acknowledges its current activity for the human; agent
+  read markers still move only through their explicit acknowledgements.
 - **Agent access over MCP.** A stdio MCP server gives each agent scoped
   catch-up (`inbox`, `read_updates`), exact message lookup, search, posting with
   idempotent request IDs, and explicit acknowledgement. Identity is fixed by the
@@ -65,6 +66,10 @@ over the carrying without taking over the decisions.
   each with its own sessions, linked discussions, prompts and Auto-continue run.
   Existing sections start with a Main pair. Session IDs identify a pair; branch
   names and working directories do not.
+- **Human attention.** Sections open on their hand-off controls and latest agent
+  messages. A Live only sidebar filter hides quiet sections; red means a decision
+  is needed, green means Auto is active, and blue means new activity while paused.
+  Decision requests remain visible after a visit and belong to their named pair.
 - **Hand-offs.** A Next turn box, prefilled with a Continue prompt that quotes the
   latest closing message, sends to the selected pair's pinned Claude session or Codex
   thread. Codex prompts go through `codex queue`; Claude prompts are relayed by a

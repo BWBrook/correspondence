@@ -251,7 +251,69 @@ function PairControls({ projectId, pairs, pair, onSelect, onSaved }) {
   );
 }
 
-export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, fallback }) {
+function PairAttention({ pairId, revision, onStatusChanged }) {
+  const [requests, setRequests] = useState([]);
+  const [error, setError] = useState("");
+  const [handling, setHandling] = useState(null);
+  const mounted = useRef(true), busy = useRef(false), sequence = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    let live = true;
+    const load = () => {
+      if (busy.current) return;
+      const request = ++sequence.current;
+      api(`/pairs/${pairId}/attention`)
+        .then((result) => {
+          if (live && request === sequence.current) { setRequests(result.decisions); setError(""); }
+        })
+        .catch((e) => live && request === sequence.current && setError(e.message));
+    };
+    load();
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 20000);
+    return () => { live = false; mounted.current = false; clearInterval(poll); };
+  }, [pairId, revision]);
+  async function handle(key) {
+    busy.current = true;
+    sequence.current += 1;
+    setHandling(key);
+    setError("");
+    try {
+      const result = await post(`/pairs/${pairId}/attention/handle`, { key });
+      if (!mounted.current) return;
+      setRequests(result.decisions);
+      onStatusChanged();
+    } catch (e) {
+      if (!mounted.current) return;
+      setError(e.message);
+      api(`/pairs/${pairId}/attention`).then((result) => mounted.current && setRequests(result.decisions)).catch(() => {});
+    } finally {
+      busy.current = false;
+      if (mounted.current) setHandling(null);
+    }
+  }
+  if (!requests.length && !error) return null;
+  return (
+    <section className="decision-requests" aria-label="Your decisions">
+      {requests.map((request) => (
+        <div className="decision-request" key={request.key}>
+          <div>
+            <strong><span className="project-status decision" aria-hidden="true" /> {request.agent} needs your decision</strong>
+            <p>{request.summary}</p>
+          </div>
+          <button className="outline" disabled={Boolean(handling)} onClick={() => handle(request.key)}>
+            {handling === request.key ? "Marking…" : "Mark handled"}
+          </button>
+        </div>
+      ))}
+      {requests.length > 0 && <p className="hint">Reply through the prompt below, or in the agent’s chat. Opening this section does not dismiss the request.</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onStatusChanged, fallback }) {
   const [pairState, setPairState] = useState({ projectId: null, items: null, selectedId: null });
   const [turnState, setTurnState] = useState({ scope: null, items: null });
   const [error, setError] = useState("");
@@ -319,8 +381,8 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, fal
   return (
     <main className="reader turns-panel" aria-label="Agent turns">
       <header className="turns-header">
-        <button className="outline mobile-turns" onClick={onBack}>Back to discussions</button>
-        <h2>{projectId ? "Recent agent turns" : "Latest agent turns"}</h2>
+        <button className="outline section-discussions" onClick={onBack}>Discussions</button>
+        <h2>{projectId ? projectNames[projectId] || "Agent turns" : "Latest agent turns"}</h2>
         <p>
           {projectId
             ? "Each agent’s closing message for the selected pair, newest first."
@@ -338,9 +400,16 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, fal
           onSelect={selectPair} onSaved={savePair} />
       )}
       {projectId && !pairs && !error && <p className="hint" role="status">Loading pairs…</p>}
+      {projectId && pair && (
+        <PairAttention key={`attention:${pair.id}:${lastTurn?.recorded_at || "none"}`} pairId={pair.id}
+          revision={lastTurn?.recorded_at} onStatusChanged={onStatusChanged} />
+      )}
       {projectId && pair && turns && (
         <NextTurn key={`${projectId}:${pair.id}`} pairId={pair.id} pairName={pair.name}
-          lastTurn={lastTurn} onPinsChanged={() => setReload((n) => n + 1)} />
+          lastTurn={lastTurn} onPinsChanged={() => {
+            setReload((n) => n + 1);
+            onStatusChanged();
+          }} onStateChanged={onStatusChanged} />
       )}
       {projectId && pair && turns?.length === 0 && <p className="hint">No turns from this pair yet. Choose its sessions under Pair sessions.</p>}
       {(turns || []).map((turn, index) => (

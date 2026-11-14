@@ -191,8 +191,6 @@ export function Message({
   messages,
   onNavigate,
   highlighted,
-  onMarkRead,
-  readBusy,
   archived = false,
 }) {
   const parent = messages.find((m) => m.id === message.parent_id);
@@ -255,16 +253,6 @@ export function Message({
             >
               <CornerDownRight size={14} /> Reply
             </button>
-            {onMarkRead && (
-              <button
-                className="text-button mark-through"
-                disabled={readBusy}
-                title="Includes all earlier messages in this discussion"
-                onClick={onMarkRead}
-              >
-                Mark read through #{message.id}
-              </button>
-            )}
           </div>
         )}
       </div>

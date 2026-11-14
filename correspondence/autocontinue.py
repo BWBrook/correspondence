@@ -28,6 +28,7 @@ comparing clocks on different machines.
 from __future__ import annotations
 
 from .dispatch import deliver_here
+from .attention import pair_decisions
 from .store import Conflict
 from .turns import continue_prompts, latest_limits, latest_main_turn, turn_key
 from .usage import highest
@@ -67,6 +68,9 @@ def advance(store, run: dict, history: list[dict], pins: dict, user: str, limits
         if window and window["percent"] >= run["ceiling"]:
             label = window["label"].removesuffix(" limit")
             return stop(f"{agent}'s {label} limit is at {window['percent']:g}% (ceiling {run['ceiling']}%)")
+    decisions = pair_decisions(store, pair, history, pins=pins, user=user)
+    if decisions:
+        return stop(f"{decisions[0]['agent']} needs your decision: {decisions[0]['summary']}")
     latest = latest_main_turn(history, pair, pins, user)
     if latest is None or store.prompted(pair_id, turn_key(latest)):
         return None  # nothing yet, or this turn's prompt is out: wait for the answer

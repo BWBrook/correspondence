@@ -135,7 +135,7 @@ export function SearchDialog({
         <p className="search-hint">
           {archived
             ? "Searches archived projects only. Read acknowledgements remain preserved."
-            : "Matches the text you enter. Opening a result does not mark it read."}
+            : "Matches the text you enter. Results open at the matching message."}
         </p>
         <p role="status" className="search-status">
           {loading

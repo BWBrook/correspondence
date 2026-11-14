@@ -5,14 +5,13 @@ import {
   ArrowDown,
   Download,
   RefreshCw,
-  Check,
   Search,
 } from "lucide-react";
 import { api, authorLabel, post } from "./api";
 import { Composer, Message } from "./components";
 
 // A reader owns one contiguous window of a discussion. Navigation can replace
-// that window; paging extends it. Neither operation acknowledges any messages.
+// that window; paging extends it. Section visits are acknowledged by the board.
 export function ThreadReader({
   route,
   listed,
@@ -20,6 +19,7 @@ export function ThreadReader({
   onBack,
   onSearch,
   onRefresh,
+  onProject,
 }) {
   const { threadId, archived } = route;
   const [detail, setDetail] = useState(null);
@@ -172,6 +172,7 @@ export function ThreadReader({
           : "",
       );
       setDetail(next);
+      onProject?.(result.thread.project_id);
     } catch (e) {
       if (
         mounted.current &&
@@ -206,38 +207,6 @@ export function ThreadReader({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route]);
 
-  async function acknowledge(messageId, wholeThread = false) {
-    if (archived || busy || !messageId) return;
-    setBusy(true);
-    setError("");
-    try {
-      // Capture the clicked snapshot's ID. Never resolve "latest" on the server
-      // during this write: arrivals after the click must remain unread.
-      await post(`/threads/${threadId}/read`, { message_id: messageId });
-      const fresh = await api(
-        `/threads/${threadId}?after=${messageId}&limit=1`,
-      );
-      if (!mounted.current) return;
-      pendingScroll.current = readingAnchor();
-      setDetail(
-        (prev) =>
-          prev && {
-            ...prev,
-            thread: fresh.thread,
-            has_more: prev.next_after < fresh.thread.last_message_id,
-          },
-      );
-      setNotice(
-        `${wholeThread ? "Thread marked read" : "Marked read"} through #${messageId}. ${fresh.thread.unread_count} unread ${fresh.thread.unread_count === 1 ? "message remains" : "messages remain"}.`,
-      );
-      await onRefresh();
-    } catch (e) {
-      if (mounted.current) setError(e.message);
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  }
-
   async function changeStatus() {
     if (archived) return;
     const next = detail.thread.status === "resolved" ? "open" : "resolved";
@@ -266,8 +235,7 @@ export function ThreadReader({
     }
   }
 
-  // List polling can advertise newer arrivals without moving the reader or
-  // extending the snapshot that an in-flight acknowledgement already captured.
+  // List polling advertises newer arrivals without moving the reading position.
   const snapshot = detail?.thread;
   const thread =
     listed &&
@@ -281,7 +249,6 @@ export function ThreadReader({
     listed?.last_message_id || 0,
   );
   const newMessages = snapshot && latestId > snapshot.last_message_id;
-  const unreadCount = thread?.unread_count;
   const locked = loading || busy;
 
   return (
@@ -298,8 +265,9 @@ export function ThreadReader({
         <>
           <header className="reader-header">
             <button
-              className="icon mobile-back"
-              aria-label="Back to discussions"
+              className="icon reader-back"
+              aria-label={archived ? "Back to discussions" : "Back to section"}
+              title={archived ? "Back to discussions" : "Back to section"}
               onClick={onBack}
             >
               <ArrowLeft size={20} />
@@ -337,8 +305,8 @@ export function ThreadReader({
           <details className="read-state">
             <summary>Participant acknowledgements</summary>
             <p>
-              Explicit read markers only; these do not prove attention or
-              agreement. Counts exclude each participant’s own messages.
+              Agent read markers are explicit; your marker records section visits.
+              Neither proves attention or agreement. Counts exclude each participant’s own messages.
             </p>
             <ul>
               {Object.entries(thread.read_markers || {}).map(([name, id]) => (
@@ -366,13 +334,6 @@ export function ThreadReader({
                 <ArrowUp size={16} /> Top
               </button>
               <button
-                className="text-button"
-                disabled={locked || !unreadCount}
-                onClick={() => onNavigate({ mode: "unread" })}
-              >
-                First unread
-              </button>
-              <button
                 className="outline"
                 disabled={locked}
                 onClick={() => onNavigate({ mode: "latest" })}
@@ -392,18 +353,8 @@ export function ThreadReader({
             </div>
             <div className="thread-read-actions">
               <span>
-                {unreadCount} unread · {thread.message_count} messages
+                {thread.message_count} messages
               </span>
-              {!archived && (
-                <button
-                  className="text-button"
-                  disabled={locked || !unreadCount}
-                  title={`Includes all messages through #${latestId}, even those not displayed`}
-                  onClick={() => acknowledge(latestId, true)}
-                >
-                  <Check size={16} /> Mark thread read
-                </button>
-              )}
             </div>
             <div className="reader-notice" role="status">
               {loading ? "Loading messages…" : busy ? "Saving…" : notice}
@@ -437,7 +388,7 @@ export function ThreadReader({
               <React.Fragment key={m.id}>
                 {m.id === thread.first_unread_message_id && (
                   <div className="unread-divider">
-                    New since you last marked read
+                    New since your section visit
                   </div>
                 )}
                 <Message
@@ -447,12 +398,6 @@ export function ThreadReader({
                   onReply={setReplyTo}
                   highlighted={highlight === m.id}
                   onNavigate={(id) => onNavigate({ messageId: id })}
-                  onMarkRead={
-                    !archived && m.id > thread.last_read_message_id
-                      ? () => acknowledge(m.id)
-                      : null
-                  }
-                  readBusy={locked}
                 />
               </React.Fragment>
             ))}

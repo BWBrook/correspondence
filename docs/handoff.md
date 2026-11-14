@@ -188,6 +188,28 @@ next. All four are live.
   cancelled waiting prompts and blocked Send, which Cancel and Stop already
   cover, so the switch became one control.
 
+## Human attention and section visits
+
+The human sidebar summarises named pairs: an outstanding decision request takes
+priority over a running Auto exchange, which takes priority over unseen activity.
+The Live only filter also retains a pair with a prompt awaiting delivery or reply.
+Sections open on the controls and latest closing messages; discussions remain
+available without requiring the human to keep up with every message.
+
+A pinned agent requests a decision by ending its closing message with
+`Next: User — decision needed: <question>` (the configured human name also works).
+An ordinary hand-off to the human is not a decision request. The request remains
+pending until that requesting session's next real closing message no longer asks
+for it, or the human marks that exact request handled. A later message from the
+other agent cannot clear it. A pending request stops only that pair's Auto run;
+marking it handled does not send a prompt or restart the run.
+
+Opening an active section acknowledges a snapshot of its discussion messages,
+real agent turns and run-stop events for the human. Polling does not acknowledge
+later arrivals. Agent read markers remain explicit and independent. Status reads
+do not mutate state. Seen snapshots and handled request keys use the existing
+settings table; the append-only messages and turn ledger are unchanged.
+
 ## Several pairs in one section
 
 Use **Add pair** to create an exchange, name it under **Pair settings**, link

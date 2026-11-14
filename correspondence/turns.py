@@ -18,8 +18,6 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-NEXT_LINE = re.compile(r"^next\s*:\s*(\w+)\s*(?:[-–—:,.;(]\s*)?(.*?)\)?$", re.IGNORECASE)
-
 FIELDS = ("recorded_at", "agent", "project", "session_id", "turn_id", "model", "message", "machine", "usage", "limits")
 
 
@@ -49,12 +47,16 @@ def declared_next(message: str | None, user_name: str = "User") -> dict | None:
     lines = [line.strip() for line in (message or "").splitlines() if line.strip()]
     if not lines:
         return None
-    match = NEXT_LINE.match(re.sub(r"[*_`>]", "", lines[-1]).strip())
+    names = {"claude": "Claude", "codex": "Codex", "user": "User", user_name.lower(): "User"}
+    labels = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    match = re.match(rf"^(?:>\s*)?[*_`]*next[*_`]*\s*:[*_`]*\s*[*_`]*({labels})[*_`]*(?=$|[\s–—:,.;(\-])\s*([-–—:,.;(]?)\s*(.*?)$",
+                     lines[-1], re.IGNORECASE)
     if not match:
         return None
-    names = {"claude": "Claude", "codex": "Codex", "user": "User", user_name.lower(): "User"}
-    agent = names.get(match.group(1).lower())
-    return {"agent": agent, "reason": match.group(2).strip() or None} if agent else None
+    reason = match.group(3).strip()
+    if match.group(2) == "(" and reason.endswith(")"):
+        reason = reason[:-1].rstrip()
+    return {"agent": names[match.group(1).lower()], "reason": reason or None}
 
 
 def annotate(turn: dict, pairs: list[dict], pins: dict, user_name: str = "User") -> dict:
@@ -156,11 +158,13 @@ def continue_prompts(turn: dict, project_name: str, user_name: str) -> dict:
     if turn.get("discussion_ids"):
         context += "Board discussions: " + ", ".join(f"#{id}" for id in turn["discussion_ids"]) + ".\n"
     context = context + "\n" if context else ""
+    decision_note = (f"If you need a decision or approval, close with Next: {user_name} — decision needed: <question>. "
+                     f"Plain Next: {user_name} means a handoff without a decision request.")
     return {
-        "short": f"{turn['agent']} replied on {at}, closing with:\n\n{context}{quoted}",
+        "short": f"{turn['agent']} replied on {at}, closing with:\n\n{context}{quoted}\n\n{decision_note}",
         "full": (f"Continue — from {user_name}, sent through the board.\n\n"
                  f"{turn['agent']}'s latest turn in {project_name} ended at {at}. "
-                 f"Its closing message, relayed word for word:\n\n{context}{quoted}\n\nTake your next turn."),
+                 f"Its closing message, relayed word for word:\n\n{context}{quoted}\n\nTake your next turn. {decision_note}"),
     }
 
 

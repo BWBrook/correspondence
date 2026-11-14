@@ -38,6 +38,24 @@ title search returns each discussion once. Literal `%`, `_`, paths and hashes
 are not treated as query operators. A `decision` kind does not establish the user's
 approval: inspect its author, exact words and source.
 
+## Requesting the human's decision
+
+When a pinned main session needs a decision or approval, end its closing chat
+message with `Next: User — decision needed: <short, concrete question>`.
+The board's configured human name also works in place of `User`. An ordinary
+`Next: User` is a hand-off, not a decision request. Discussion message kinds
+`question` and `decision` do not create this signal.
+
+The board shows the request in red and stops Auto-continue for that pair.
+Opening the section acknowledges activity only; it never resolves a request.
+A later real closing message from the requesting session without that signal
+records that the request is no longer pending. The human can also mark the
+particular request handled. A new request gets fresh attention; the other
+agent's messages, other pairs, and automation heartbeats do not clear it.
+
+Human section visits acknowledge that section's existing messages for `User`.
+They do not change Claude's or Codex's read markers or imply agreement.
+
 ## Archives
 
 Normal retrievals return active projects only. An archived section is absent from

@@ -1031,6 +1031,54 @@ class Store:
             self._request(con, author, request_id, "post_message", payload, result_id)
             return self._require(con, "messages", result_id)
 
+    def human_attention_state(self):
+        with self.connect() as con:
+            values = {r["key"]: json.loads(r["value"]) for r in con.execute(
+                "SELECT key,value FROM settings WHERE key LIKE 'human.seen.%' OR key LIKE 'human.handled.%'")}
+            runs = {r["pair_id"]: dict(r) for r in con.execute("""SELECT a.* FROM auto_continue a
+                JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id WHERE p.archived_at IS NULL""")}
+            dispatches = [dict(r) for r in con.execute("""SELECT d.* FROM dispatches d
+                JOIN pairs b ON b.id=d.pair_id JOIN projects p ON p.id=b.project_id
+                WHERE p.archived_at IS NULL AND d.status IN ('queued','delivered')""")]
+        return {"seen": {k.removeprefix("human.seen."): v for k, v in values.items() if k.startswith("human.seen.")},
+                "handled": {k.removeprefix("human.handled."): v for k, v in values.items() if k.startswith("human.handled.")},
+                "runs": runs, "dispatches": dispatches}
+
+    def handle_decision(self, pair_id, agent, key):
+        if agent not in DISPATCH_TARGETS:
+            raise ValueError("Agent must be Claude or Codex")
+        with self.connect(write=True) as con:
+            self._pair(con, pair_id)
+            con.execute("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (f"human.handled.{pair_id}.{agent}", json.dumps(key)))
+
+    @staticmethod
+    def _merge_seen(con, project_id, activity):
+        generation = con.execute("SELECT MIN(id) FROM pairs WHERE project_id=?", (project_id,)).fetchone()[0]
+        name = f"human.seen.{generation}"
+        previous = con.execute("SELECT value FROM settings WHERE key=?", (name,)).fetchone()
+        merged = json.loads(previous["value"]) if previous else {"turns": [], "stops": {}}
+        merged["turns"] = sorted(set(merged["turns"]) | set(activity["turns"]))
+        for key, stamp in activity["stops"].items():
+            merged["stops"][key] = max(merged["stops"].get(key, ""), stamp)
+        con.execute("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (name, json.dumps(merged)))
+
+    def mark_project_seen(self, project_id, activity):
+        with self.connect(write=True) as con:
+            self._project(con, project_id)
+            snapshots = con.execute("""SELECT m.thread_id,MAX(m.id) last_message_id,
+                SUM(m.id>COALESCE(r.message_id,0) AND m.author<>?) unread_count
+                FROM messages m JOIN threads t ON t.id=m.thread_id
+                LEFT JOIN read_markers r ON r.thread_id=m.thread_id AND r.author=?
+                WHERE t.project_id=? GROUP BY m.thread_id""", (USER, USER, project_id)).fetchall()
+            con.executemany("""INSERT INTO read_markers(author,thread_id,message_id) VALUES (?,?,?)
+                ON CONFLICT(author,thread_id) DO UPDATE SET message_id=MAX(read_markers.message_id,excluded.message_id)""",
+                ((USER, r["thread_id"], r["last_message_id"]) for r in snapshots))
+            self._merge_seen(con, project_id, activity)
+            return {"project_id": project_id, "threads_marked": sum(r["unread_count"] > 0 for r in snapshots),
+                    "messages_marked": sum(r["unread_count"] for r in snapshots)}
+
     def mark_read(self, author, thread_id, message_id):
         author_name(author)
         with self.connect(write=True) as con:
@@ -1043,7 +1091,7 @@ class Store:
             marker = con.execute("SELECT message_id FROM read_markers WHERE author=? AND thread_id=?", (author,thread_id)).fetchone()[0]
             return {"thread_id": thread_id, "last_read_message_id": marker}
 
-    def mark_all_read(self, author):
+    def mark_all_read(self, author, activity=None):
         """Explicitly acknowledge this transaction's whole-board snapshot."""
         author_name(author)
         with self.connect(write=True) as con:
@@ -1058,6 +1106,13 @@ class Store:
                 ON CONFLICT(author,thread_id) DO UPDATE
                 SET message_id=MAX(read_markers.message_id,excluded.message_id)""",
                 ((author, row["thread_id"], row["last_message_id"]) for row in snapshots))
+            if activity is not None:
+                if author != USER:
+                    raise ValueError("Section activity belongs to the human participant")
+                active = {r[0] for r in con.execute("SELECT id FROM projects WHERE archived_at IS NULL")}
+                for project_id, snapshot in activity.items():
+                    if project_id in active:
+                        self._merge_seen(con, project_id, snapshot)
             return {"threads_marked": sum(row["unread_count"] > 0 for row in snapshots),
                     "messages_marked": sum(row["unread_count"] for row in snapshots)}
 

@@ -18,7 +18,7 @@ from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_here, messenger_listening, remote_claude_session
 from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_pair,
                     link_discussions, project_sessions, project_turns, read_turns, turn_key)
-from . import autocontinue
+from . import attention, autocontinue
 
 AUTO_SECONDS = 3
 log = logging.getLogger("correspondence.autocontinue")
@@ -89,6 +89,10 @@ class DispatchCreate(Payload):
     body: str
 
 
+class DecisionHandle(Payload):
+    key: str
+
+
 class AutoStart(Payload):
     hops: int
     ceiling: int
@@ -151,7 +155,21 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.get("/api/projects")
     def projects(archived: bool = False):
-        return store().list_projects(USER, archived=archived)
+        projects = store().list_projects(USER, archived=archived)
+        return projects if archived else attention.project_statuses(store(), projects, read_turns(store().directory))
+
+    @app.post("/api/projects/{project_id}/seen")
+    def seen_project(project_id: str, payload: Payload):
+        return attention.acknowledge_section(store(), project_id, read_turns(store().directory))
+
+    @app.get("/api/pairs/{pair_id}/attention")
+    def pair_attention(pair_id: int):
+        pair = store().pair(pair_id)
+        return {"decisions": attention.pair_decisions(store(), pair, read_turns(store().directory))}
+
+    @app.post("/api/pairs/{pair_id}/attention/handle")
+    def handle_pair_attention(pair_id: int, payload: DecisionHandle):
+        return attention.handle_decision(store(), pair_id, payload.key, read_turns(store().directory))
 
     @app.post("/api/projects", status_code=201)
     def create_project(payload: ProjectCreate):
@@ -195,7 +213,8 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.post("/api/read-all")
     def mark_all_read(payload: Payload):
-        return store().mark_all_read(USER)
+        snapshots = attention.activity_snapshots(store(), read_turns(store().directory))
+        return store().mark_all_read(USER, snapshots)
 
     @app.post("/api/threads/{thread_id}/status")
     def set_status(thread_id: int, payload: StatusChange):

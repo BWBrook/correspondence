@@ -288,3 +288,27 @@ The final layout check also corrected checkbox sizing inherited from generic
 input styles and added mobile navigation between discussions and agent turns.
 Mobile pair selection, settings, Auto/Send access and return navigation were
 verified at 390 pixels; discussion labels remain readable at both widths.
+
+## Human attention and controls-first sections — 14 November 2026
+
+- 208 automated tests pass. New coverage distinguishes explicit decision requests
+  from ordinary human hand-offs, preserves requests across co-agent replies and
+  visits, scopes handling and Auto stops to the pair, and keeps assistant read
+  markers unchanged. Archives, section ID reuse, heartbeat exclusion, prompt
+  wording, pending manual delivery and activity snapshots are covered.
+- Independent review reproduced same-second event collisions, a reader Back
+  action that acknowledged later arrivals, and stale attention responses after
+  handling. Fixes use exact event identities, monotone seen-event sets, navigation
+  without a new section visit, and request sequencing. Focused regression checks
+  and the full suite pass. The database remains schema 11.
+- Isolated Playwright checks with synthetic data and fake delivery verified
+  red/green/blue priority, pair switching, exact-request handling, fresh requests,
+  Live only filtering and retention of the selected quiet section. Section visits
+  acknowledge once; pair switches, discussion navigation and polling do not.
+  A later message stayed new until a real section re-entry. Direct discussion
+  links opened the requested thread and acknowledged only its owning section;
+  archived sections caused no seen writes.
+- Desktop and 390-pixel mobile layouts were inspected. Decision banners, controls
+  and return navigation are available at both sizes; mobile has no document
+  overflow. The production build was made with an isolated temporary outDir.
+  No synthetic prompt or decision request was sent to a real agent.

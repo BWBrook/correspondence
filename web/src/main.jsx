@@ -14,7 +14,6 @@ import {
   UserRound,
   Monitor,
   FolderOpen,
-  CheckCheck,
   Archive,
   ArchiveRestore,
   Activity,
@@ -63,6 +62,18 @@ function orderProjects(projects, order) {
     );
   });
 }
+function projectStatusTitle(project) {
+  const details = (project.status?.pairs || []).map((pair) => {
+    const states = [];
+    for (const request of pair.decisions) states.push(`${request.agent}: ${request.summary}`);
+    if (pair.running) states.push("Auto active");
+    if (pair.pending) states.push("awaiting a reply");
+    if (pair.new_activity) states.push("new activity");
+    return `${pair.name}: ${states.join("; ") || "quiet"}`;
+  });
+  return [project.status?.label || "Quiet", ...details].join("\n");
+}
+
 function ProjectDescription({ text }) {
   const id = useId();
   const ref = useRef(null);
@@ -120,14 +131,14 @@ function Board({ route, navigate }) {
     [projectId, setProjectId] = useState(route.projectId);
   const [threads, setThreads] = useState([]);
   const threadId = route.threadId;
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [showTurns, setShowTurns] = useState(false);
+  const [showTurns, setShowTurns] = useState(Boolean(route.projectId) && !archived);
+  const [liveOnly, setLiveOnly] = useState(() => {
+    try { return localStorage.getItem("correspondence:live-only") === "true"; }
+    catch { return false; }
+  });
+  const [sectionVisit, setSectionVisit] = useState(0);
+  const seenEntry = useRef(null);
   const [searchScope, setSearchScope] = useState(null);
-  const [markingAll, setMarkingAll] = useState(false),
-    [readAllNotice, setReadAllNotice] = useState(""),
-    [readAllError, setReadAllError] = useState(""),
-    [readAllThread, setReadAllThread] = useState(null);
-  const markingAllRef = useRef(false);
   const [modal, setModal] = useState(null),
     [error, setError] = useState("");
   const [renameDialog, setRenameDialog] = useState(null);
@@ -136,7 +147,6 @@ function Board({ route, navigate }) {
     [projectNotice, setProjectNotice] = useState(null);
   const restoringRef = useRef(false);
   const currentProject = useRef(projectId),
-    currentUnread = useRef(unreadOnly),
     listRequest = useRef(0),
     projectRequest = useRef(0);
   const projectsRef = useRef(projects),
@@ -145,7 +155,6 @@ function Board({ route, navigate }) {
   projectsRef.current = projects;
   navigateRef.current = navigate;
   currentProject.current = projectId;
-  currentUnread.current = unreadOnly;
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -157,15 +166,7 @@ function Board({ route, navigate }) {
   const project = projects.find((p) => p.id === projectId);
   const projectNames = Object.fromEntries(projects.map((p) => [p.id, p.name]));
   const listedThread = threads.find((thread) => thread.id === threadId);
-  // An acknowledged thread disappears from an Unread-filtered list. Retain its
-  // fresh metadata so the open reader also reflects the explicit bulk action.
-  const readerThread =
-    readAllThread?.id === threadId &&
-    (!listedThread ||
-      readAllThread.last_read_message_id > listedThread.last_read_message_id ||
-      readAllThread.last_message_id > listedThread.last_message_id)
-      ? readAllThread
-      : listedThread;
+  const readerThread = listedThread;
   const refreshProjects = useCallback(async () => {
     const sequence = ++projectRequest.current;
     const list = await api(`/projects?archived=${archived}`);
@@ -191,56 +192,46 @@ function Board({ route, navigate }) {
   }, [archived]);
   const refreshList = useCallback(async () => {
     const selected = currentProject.current,
-      unread = currentUnread.current,
       request = ++listRequest.current;
     const scope = selected
       ? `project_id=${encodeURIComponent(selected)}`
       : "limit=60";
     const list = await api(
-      `/threads?${scope}&unread_only=${unread}&archived=${archived}`,
+      `/threads?${scope}&archived=${archived}`,
     );
     if (
       request === listRequest.current &&
-      currentProject.current === selected &&
-      currentUnread.current === unread
+      currentProject.current === selected
     )
       setThreads(list);
   }, [archived]);
   const refreshCounts = useCallback(async () => {
     await Promise.all([refreshProjects(), refreshList()]);
   }, [refreshProjects, refreshList]);
-  async function markAllRead() {
-    if (archived || markingAllRef.current) return;
-    markingAllRef.current = true;
-    setMarkingAll(true);
-    setReadAllNotice("");
-    setReadAllError("");
-    try {
-      const result = await post("/read-all", {});
-      setReadAllNotice(
-        `${result.messages_marked} unread ${result.messages_marked === 1 ? "message" : "messages"} acknowledged across ${result.threads_marked} ${result.threads_marked === 1 ? "thread" : "threads"}.`,
-      );
-      await Promise.all([
-        refreshCounts(),
-        threadId
-          ? api(`/threads/${threadId}?mode=latest&limit=1`).then((result) =>
-              setReadAllThread(result.thread),
-            )
-          : Promise.resolve(),
-      ]);
-    } catch (error) {
-      setReadAllError(error.message);
-    } finally {
-      markingAllRef.current = false;
-      setMarkingAll(false);
+  useEffect(() => {
+    if (archived || !projectId || !project) {
+      if (!projectId) seenEntry.current = null;
+      return;
     }
-  }
+    const entry = `${projectId}:${project.state_token}:${sectionVisit}`;
+    if (seenEntry.current === entry) return;
+    seenEntry.current = entry;
+    const selected = projectId;
+    post(`/projects/${encodeURIComponent(selected)}/seen`, {})
+      .then(() => {
+        if (!mounted.current) return;
+        refreshProjects().catch((e) => setError(e.message));
+        if (currentProject.current === selected)
+          refreshList().catch((e) => setError(e.message));
+      })
+      .catch((e) => mounted.current && setError(e.message));
+  }, [archived, projectId, project?.state_token, sectionVisit, refreshProjects, refreshList]);
   useEffect(() => {
     refreshProjects().catch((e) => setError(e.message));
   }, [refreshProjects]);
   useEffect(() => {
     refreshList().catch((e) => setError(e.message));
-  }, [projectId, project?.state_token, unreadOnly, refreshList]);
+  }, [projectId, project?.state_token, refreshList]);
   useEffect(() => {
     const poll = setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -251,14 +242,18 @@ function Board({ route, navigate }) {
     return () => clearInterval(poll);
   }, [refreshProjects, refreshList]);
   useEffect(() => {
-    if (!route.threadId) setProjectId(route.projectId);
-  }, [route.projectId, route.threadId]);
+    if (!route.threadId) {
+      setProjectId(route.projectId);
+      setShowTurns(Boolean(route.projectId) && !archived);
+    }
+  }, [route.projectId, route.threadId, archived]);
   function selectThread(id) {
     setShowTurns(false);
     navigate(id);
   }
   function selectProject(id) {
-    setShowTurns(false);
+    setShowTurns(Boolean(id) && !archived);
+    setSectionVisit((value) => value + 1);
     if (currentProject.current !== id) {
       listRequest.current += 1;
       setThreads([]);
@@ -304,7 +299,6 @@ function Board({ route, navigate }) {
     if (!mounted.current) return;
     const type = modal;
     setModal(null);
-    setUnreadOnly(false);
     if (type === "project") {
       refreshProjects().catch((e) => setError(e.message));
       selectProject(result.id);
@@ -313,6 +307,10 @@ function Board({ route, navigate }) {
       selectThread(result.id);
     }
   }
+  const visibleProjects = orderProjects(projects, projectOrder).filter(
+    (p) => archived || !liveOnly || p.live || p.id === projectId,
+  );
+  const controlsView = !archived && projectId && showTurns && !threadId;
   const emptyReader = (
     <main className="reader">
       <div className="empty-reader">
@@ -335,7 +333,7 @@ function Board({ route, navigate }) {
     </main>
   );
   return (
-    <div className={`app ${threadId || (showTurns && !archived) ? "reading" : ""}`}>
+    <div className={`app ${threadId || (showTurns && !archived) ? "reading" : ""}${controlsView ? " controls-view" : ""}`}>
       <aside className="sidebar">
         <a className="brand" href="/">
           Correspondence
@@ -375,22 +373,22 @@ function Board({ route, navigate }) {
           </select>
         </label>
         {!archived && (
-          <div className="board-read-actions">
-            <button
-              className="text-button"
-              disabled={markingAll}
-              onClick={markAllRead}
-              title="Mark every thread on the active board read for you, including messages not displayed. Archived projects and later arrivals remain unchanged."
-            >
-              <CheckCheck size={17} />{" "}
-              {markingAll ? "Marking all read…" : "Mark all threads read"}
-            </button>
-            {readAllNotice && <p role="status">{readAllNotice}</p>}
-            {readAllError && (
-              <p role="alert" className="error">
-                {readAllError}
-              </p>
-            )}
+          <div className="project-filter">
+            <label title="Show new activity, active Auto runs, pending turns and outstanding decisions. The selected section stays visible.">
+              <input type="checkbox" checked={liveOnly} onChange={(event) => {
+                const checked = event.target.checked;
+                setLiveOnly(checked);
+                try { localStorage.setItem("correspondence:live-only", String(checked)); }
+                catch { /* Filtering works without browser storage. */ }
+              }} />
+              Live only
+            </label>
+            <details className="status-legend">
+              <summary>Status colours</summary>
+              <span><i className="project-status decision" /> Needs your decision</span>
+              <span><i className="project-status running" /> Auto active</span>
+              <span><i className="project-status activity" /> New activity, paused</span>
+            </details>
           </div>
         )}
         <nav aria-label={archived ? "Archived projects" : "Projects"}>
@@ -411,16 +409,14 @@ function Board({ route, navigate }) {
               {archived ? "All archived discussions" : "Recent activity"}
             </span>
           </button>
-          {orderProjects(projects, projectOrder).map((p) => (
+          {visibleProjects.map((p) => (
             <button
               key={p.id}
               className={`project ${p.id === projectId ? "selected" : ""}`}
               aria-current={p.id === projectId ? "page" : undefined}
-              title={
-                p.last_activity_at
-                  ? `Last activity ${stamp(p.last_activity_at)}`
-                  : "No discussions yet"
-              }
+              title={archived
+                ? (p.last_activity_at ? `Last activity ${stamp(p.last_activity_at)}` : "No discussions yet")
+                : projectStatusTitle(p)}
               onClick={() => selectProject(p.id)}
             >
               <span className="project-label">
@@ -431,16 +427,15 @@ function Board({ route, navigate }) {
                   </small>
                 )}
               </span>
-              {!archived && p.unread_count > 0 && (
-                <span
-                  className="unread-count"
-                  aria-label={`${p.unread_count} unread messages`}
-                >
-                  {p.unread_count}
-                </span>
+              {!archived && p.status?.kind !== "quiet" && p.status?.kind && (
+                <span className={`project-status ${p.status.kind}`} role="img"
+                  aria-label={p.status.label} />
               )}
             </button>
           ))}
+          {!archived && liveOnly && !visibleProjects.length && (
+            <p className="quiet-projects">No live projects. Clear the filter to browse all projects.</p>
+          )}
           {!archived && (
             <button
               className="text-button new-project"
@@ -496,23 +491,12 @@ function Board({ route, navigate }) {
                 : "Search board"}
           </button>
           {!archived && (
-            <button className="outline mobile-turns" onClick={() => setShowTurns(true)}>
+            <button className="outline section-turns" onClick={() => setShowTurns(true)}>
               Agent turns &amp; hand-offs
             </button>
           )}
           <div className="tabs">
-            <button
-              className={!unreadOnly ? "active" : ""}
-              onClick={() => setUnreadOnly(false)}
-            >
-              All
-            </button>
-            <button
-              className={unreadOnly ? "active" : ""}
-              onClick={() => setUnreadOnly(true)}
-            >
-              Unread
-            </button>
+            <span>Discussions</span>
             <button
               className="icon refresh-list"
               aria-label="Refresh discussions"
@@ -594,9 +578,6 @@ function Board({ route, navigate }) {
                   </span>
                 )}
                 <h3>
-                  {!archived && t.unread_count > 0 && (
-                    <span className="unread-dot" aria-hidden="true" />
-                  )}
                   {t.title}
                 </h3>
                 <p className="thread-meta">
@@ -606,9 +587,6 @@ function Board({ route, navigate }) {
                   </time>{" "}
                   · {t.message_count}{" "}
                   {t.message_count === 1 ? "message" : "messages"}
-                  {!archived && t.unread_count > 0
-                    ? ` · ${t.unread_count} unread`
-                    : ""}
                   {t.status === "resolved" ? " · Resolved" : ""}
                 </p>
                 {t.last_excerpt && (
@@ -621,13 +599,11 @@ function Board({ route, navigate }) {
             ))
           ) : (
             <div className="empty-list">
-              {unreadOnly
-                ? "You’re all caught up."
-                : archived
-                  ? "No archived discussions here."
-                  : project
-                    ? "Start a discussion to exchange ideas, questions, and evidence."
-                    : "No discussions yet. Create a project to begin."}
+              {archived
+                ? "No archived discussions here."
+                : project
+                  ? "Start a discussion to exchange ideas, questions, and evidence."
+                  : "No discussions yet. Create a project to begin."}
             </div>
           )}
         </div>
@@ -644,9 +620,13 @@ function Board({ route, navigate }) {
           route={route}
           listed={readerThread}
           onNavigate={(options) => navigate(threadId, options)}
-          onBack={() => selectProject(projectId)}
+          onBack={() => navigate(null, { projectId })}
           onRefresh={refreshCounts}
           onSearch={() => setSearchScope("thread")}
+          onProject={(id) => {
+            currentProject.current = id;
+            setProjectId(id);
+          }}
         />
       ) : !archived ? (
         <TurnsPanel
@@ -654,6 +634,7 @@ function Board({ route, navigate }) {
           projectNames={projectNames}
           onOpenProject={(id) => { selectProject(id); setShowTurns(true); }}
           onBack={() => setShowTurns(false)}
+          onStatusChanged={() => refreshProjects().catch((e) => setError(e.message))}
           fallback={emptyReader}
         />
       ) : (
@@ -668,7 +649,9 @@ function Board({ route, navigate }) {
           close={() => setSearchScope(null)}
           onSelect={(message) => {
             setSearchScope(null);
-            if (currentProject.current) setProjectId(message.project_id);
+            currentProject.current = message.project_id;
+            setProjectId(message.project_id);
+            setShowTurns(false);
             navigate(message.thread_id, { messageId: message.id });
           }}
         />
