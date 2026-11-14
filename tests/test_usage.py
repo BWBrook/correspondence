@@ -120,8 +120,7 @@ def test_continue_prompts_match_the_board_wording(monkeypatch):
     prompts = continue_prompts(turn, "Dwarf-Nova Memory", "Barry")
     decision_note = ("If you need a decision or approval, close with Next: Barry — decision needed: <question>. "
                      "Plain Next: Barry means a handoff without a decision request.")
-    assert prompts["short"] == ("Codex replied on 7 Nov 2026 at 4:08 pm, closing with:\n\n> Line one.\n> Next: Claude"
-                                f"\n\n{decision_note}")
+    assert prompts["short"] == "Codex replied on 7 Nov 2026 at 4:08 pm, closing with:\n\n> Line one.\n> Next: Claude"
     assert prompts["full"].startswith("Continue — from Barry, sent through the board.\n\nCodex's latest turn in "
                                       "Dwarf-Nova Memory ended at 7 Nov 2026 at 4:08 pm.")
     assert prompts["full"].endswith(f"> Next: Claude\n\nTake your next turn. {decision_note}")

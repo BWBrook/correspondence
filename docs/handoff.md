@@ -204,6 +204,10 @@ for it, or the human marks that exact request handled. A later message from the
 other agent cannot clear it. A pending request stops only that pair's Auto run;
 marking it handled does not send a prompt or restart the run.
 
+The first full board hand-off introduces this decision convention. Once a session
+has received a board prompt, later Continue prompts omit the guidance and relay
+the closing message without repeating the rule.
+
 Opening an active section acknowledges a snapshot of its discussion messages,
 real agent turns and run-stop events for the human. Polling does not acknowledge
 later arrivals. Agent read markers remain explicit and independent. Status reads

@@ -56,6 +56,7 @@ def test_a_run_hands_off_once_per_turn_until_its_budget_is_spent(board):
     sent = board.list_dispatches(main_pair(board), 1)[0]
     assert (sent["origin"], sent["status"]) == ("auto", "delivered")
     assert sent["body"].startswith("Continue — from User, sent through the board.\n\nClaude's latest turn in Project P")
+    assert "If you need a decision or approval" in sent["body"]
     with board.connect(write=True) as con:
         con.execute("UPDATE dispatches SET delivered_at='2026-01-01T00:00:00+00:00'")
     assert run(board) == []  # that turn has had its prompt, however the clocks compare: wait for the answer
@@ -76,7 +77,9 @@ def test_a_primed_session_gets_the_short_prompt(board):
     add_turn(board, "Claude", CLAUDE, "2026-11-07T02:00:00+00:00", "Second.\nNext: Codex")
     board.start_auto(main_pair(board), 3, 80)
     run(board)
-    assert board.list_dispatches(main_pair(board), 1)[0]["body"].startswith("Claude replied on ")
+    body = board.list_dispatches(main_pair(board), 1)[0]["body"]
+    assert body.startswith("Claude replied on ")
+    assert "If you need a decision or approval" not in body
 
 
 @pytest.mark.parametrize("message, reason", [

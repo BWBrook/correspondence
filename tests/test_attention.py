@@ -246,8 +246,9 @@ def test_decision_summary_preserves_scientific_punctuation_and_continue_instruct
     raw = read_turns(store.directory)[0]
     turn = annotate(raw, store.pairs(), store.pair_agents(), store.user_name())
     prompts = continue_prompts(turn, 'Earth', store.user_name())
+    assert 'Next: Barry W. Brook — decision needed: <question>' in prompts['full']
+    assert 'If you need a decision or approval' not in prompts['short']
     for variant in prompts.values():
-        assert 'Next: Barry W. Brook — decision needed: <question>' in variant
         assert 'C_60 or C_61 (finite response)?' in variant
 
 

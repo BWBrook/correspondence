@@ -161,7 +161,7 @@ def continue_prompts(turn: dict, project_name: str, user_name: str) -> dict:
     decision_note = (f"If you need a decision or approval, close with Next: {user_name} — decision needed: <question>. "
                      f"Plain Next: {user_name} means a handoff without a decision request.")
     return {
-        "short": f"{turn['agent']} replied on {at}, closing with:\n\n{context}{quoted}\n\n{decision_note}",
+        "short": f"{turn['agent']} replied on {at}, closing with:\n\n{context}{quoted}",
         "full": (f"Continue — from {user_name}, sent through the board.\n\n"
                  f"{turn['agent']}'s latest turn in {project_name} ended at {at}. "
                  f"Its closing message, relayed word for word:\n\n{context}{quoted}\n\nTake your next turn. {decision_note}"),
