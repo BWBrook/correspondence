@@ -123,11 +123,14 @@ function storedPair(projectId) {
 }
 
 function rememberPair(projectId, pairId) {
-  try { localStorage.setItem(`correspondence.pair.${projectId}`, String(pairId)); }
+  try {
+    if (pairId == null) localStorage.removeItem(`correspondence.pair.${projectId}`);
+    else localStorage.setItem(`correspondence.pair.${projectId}`, String(pairId));
+  }
   catch { /* Selection still works without browser storage. */ }
 }
 
-function PairSettings({ projectId, pair, onSaved }) {
+function PairSettings({ projectId, pair, onSaved, onArchived }) {
   const [name, setName] = useState(pair.name);
   const [discussionIds, setDiscussionIds] = useState(pair.discussion_ids);
   const [threads, setThreads] = useState([]);
@@ -143,11 +146,23 @@ function PairSettings({ projectId, pair, onSaved }) {
   }, [projectId]);
   async function save(event) {
     event.preventDefault();
-    setBusy(true);
+    setBusy("save");
     setError("");
     try {
-      const next = await post(`/pairs/${pair.id}`, { name, discussion_ids: discussionIds });
+      const next = await post(`/pairs/${pair.id}`, { name, discussion_ids: discussionIds, expected_state: pair.state_token });
       if (mounted.current) onSaved(next);
+    } catch (e) {
+      if (mounted.current) setError(e.message);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+  async function archive() {
+    setBusy("archive");
+    setError("");
+    try {
+      const next = await post(`/pairs/${pair.id}/archive`, { expected_state: pair.state_token });
+      if (mounted.current) onArchived(next);
     } catch (e) {
       if (mounted.current) setError(e.message);
     } finally {
@@ -182,15 +197,21 @@ function PairSettings({ projectId, pair, onSaved }) {
           ))}
         </fieldset>
         <button className="outline" type="submit" disabled={busy || !name.trim()}>
-          {busy ? "Saving…" : "Save pair settings"}
+          {busy === "save" ? "Saving…" : "Save pair settings"}
         </button>
         {error && <p className="error" role="alert">{error}</p>}
       </form>
+      <div className="pair-archive-action">
+        <p className="hint">Archive this pair when its exchange is finished. History, sessions and linked discussions are preserved. Auto stops and prompts not yet picked up are withdrawn; in-flight work may finish.</p>
+        <button className="outline" disabled={Boolean(busy)} onClick={archive}>
+          {busy === "archive" ? "Archiving…" : "Archive pair"}
+        </button>
+      </div>
     </details>
   );
 }
 
-function PairControls({ projectId, pairs, pair, onSelect, onSaved }) {
+function PairControls({ projectId, pairs, pair, archived, counts, onViewChange, onSelect, onSaved, onArchived }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
@@ -218,22 +239,29 @@ function PairControls({ projectId, pairs, pair, onSelect, onSaved }) {
   }
   return (
     <section className="pair-controls" aria-label="Exchange pairs">
+      <div className="pair-views" role="group" aria-label="Pair view">
+        <button className={!archived ? "active" : "outline"} aria-pressed={!archived}
+          onClick={() => onViewChange(false)}>Active pairs ({counts.active})</button>
+        <button className={archived ? "active" : "outline"} aria-pressed={archived}
+          onClick={() => onViewChange(true)}>Archived pairs ({counts.archived})</button>
+      </div>
       <div className="pair-toolbar">
         {pairs.length > 1 ? (
           <label>
-            Pair
-            <select aria-label="Exchange pair" value={pair?.id || ""} disabled={busy}
+            {archived ? "Archived pair" : "Pair"}
+            <select aria-label={archived ? "Archived pair" : "Exchange pair"} value={pair?.id || ""} disabled={busy}
               onChange={(event) => onSelect(Number(event.target.value))}>
               {pairs.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
-        ) : <strong>{pair?.name || "Exchange pairs"}</strong>}
-        <button className="text-button" onClick={() => { setAdding(!adding); setError(""); }} disabled={busy}>
+        ) : <strong>{pair?.name || (archived ? "No archived pairs" : "No active pairs")}</strong>}
+        {!archived && <button className="text-button" onClick={() => { setAdding(!adding); setError(""); }} disabled={busy}>
           {adding ? "Cancel new pair" : "Add pair"}
-        </button>
+        </button>}
       </div>
-      {pairs.length > 1 && <p className="hint">Each pair has its own sessions, prompts and Auto-continue run. Plan limits are shared.</p>}
-      {adding && (
+      {!archived && pairs.length > 1 && <p className="hint">Each pair has its own sessions, prompts and Auto-continue run. Plan limits are shared.</p>}
+      {!archived && !pairs.length && <p className="hint">Add a new pair, or open Archived pairs to restore a previous exchange.</p>}
+      {!archived && adding && (
         <form className="new-pair" onSubmit={create} aria-label="New pair">
           <label className="pair-field">
             New pair name
@@ -246,7 +274,80 @@ function PairControls({ projectId, pairs, pair, onSelect, onSaved }) {
           {error && <p className="error" role="alert">{error}</p>}
         </form>
       )}
-      {pair && <PairSettings key={pair.id} projectId={projectId} pair={pair} onSaved={onSaved} />}
+      {!archived && pair && <PairSettings key={`${pair.id}:${pair.state_token}`} projectId={projectId} pair={pair} onSaved={onSaved} onArchived={onArchived} />}
+    </section>
+  );
+}
+
+function ArchivedPair({ pair, onRestored }) {
+  const [history, setHistory] = useState(null);
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    let live = true;
+    const load = () => Promise.all([
+      api(`/pairs/${pair.id}/agents?archived=true`),
+      api(`/dispatches?pair_id=${pair.id}&archived=true&limit=100`),
+    ]).then(([agents, dispatches]) => {
+      if (live) { setHistory({ agents, dispatches }); setError(""); }
+    }).catch((e) => live && setError(e.message));
+    load();
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 20000);
+    return () => { live = false; mounted.current = false; clearInterval(poll); };
+  }, [pair.id]);
+  async function restore() {
+    setRestoring(true);
+    setError("");
+    try {
+      const next = await post(`/pairs/${pair.id}/restore`, { expected_state: pair.state_token });
+      if (mounted.current) onRestored(next);
+    } catch (e) {
+      if (mounted.current) setError(e.message);
+    } finally {
+      if (mounted.current) setRestoring(false);
+    }
+  }
+  return (
+    <section className="archived-pair" aria-label="Archived pair history">
+      <div className="archived-pair-heading">
+        <div>
+          <strong>Archived · {pair.name}</strong>
+          <p className="hint">Archived {stamp(pair.archived_at)}. History is read-only; restore the pair to continue its exchange.</p>
+        </div>
+        <button className="outline" disabled={restoring} onClick={restore}>
+          {restoring ? "Restoring…" : "Restore pair"}
+        </button>
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+      {!history && !error && <p className="hint" role="status">Loading archived history…</p>}
+      {history && <>
+        <details className="archived-pair-sessions">
+          <summary>Preserved sessions</summary>
+          {Object.entries(history.agents.pins).map(([agent, session]) => (
+            <p key={agent}><strong>{agent}</strong>: <code>{session}</code>
+              {history.agents.machines?.[agent] ? ` · ${history.agents.machines[agent]}` : ""}</p>
+          ))}
+          {!Object.keys(history.agents.pins).length && <p className="hint">No sessions were pinned.</p>}
+        </details>
+        <details className="archived-pair-deliveries">
+          <summary>Latest 100 deliveries ({history.dispatches.length} shown)</summary>
+          {history.dispatches.length ? <ul className="dispatches">
+            {history.dispatches.map((dispatch) => <li key={dispatch.id} className={dispatch.status}>
+              <span>To {dispatch.target} · {stamp(dispatch.requested_at)}</span>
+              <span>{dispatch.status}{dispatch.answered_at ? ` · answered ${shortTime(dispatch.answered_at)}` : ""}</span>
+              <details>
+                <summary>Prompt and receipt</summary>
+                {dispatch.detail && <p>{dispatch.detail}</p>}
+                <pre>{dispatch.body}</pre>
+              </details>
+            </li>)}
+          </ul> : <p className="hint">No prompts were sent through the board.</p>}
+        </details>
+      </>}
     </section>
   );
 }
@@ -314,29 +415,39 @@ function PairAttention({ pairId, revision, onStatusChanged }) {
 }
 
 export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onStatusChanged, fallback }) {
-  const [pairState, setPairState] = useState({ projectId: null, items: null, selectedId: null });
+  const [pairState, setPairState] = useState({ projectId: null, active: null, archived: null, selectedId: null, archivedId: null });
+  const [pairView, setPairView] = useState({ projectId: null, archived: false });
   const [turnState, setTurnState] = useState({ scope: null, items: null });
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
-  const pairs = pairState.projectId === projectId ? pairState.items : null;
-  const pair = pairs?.find((item) => item.id === pairState.selectedId) || null;
+  const pairRequest = useRef(0);
+  const archived = pairView.projectId === projectId && pairView.archived;
+  const pairs = pairState.projectId === projectId ? pairState[archived ? "archived" : "active"] : null;
+  const pair = pairs?.find((item) => item.id === (archived ? pairState.archivedId : pairState.selectedId)) || null;
   const pairId = pair?.id || null;
-  const scope = `${projectId || "all"}:${pairId || "all"}`;
+  const scope = `${projectId || "all"}:${archived ? "archived" : "active"}:${pairId || "all"}`;
   const turns = turnState.scope === scope ? turnState.items : null;
   useEffect(() => {
     if (!projectId) return;
     let live = true;
-    const load = () => api(`/projects/${encodeURIComponent(projectId)}/pairs`)
-      .then((items) => {
-        if (!live) return;
+    const load = () => {
+      const request = ++pairRequest.current;
+      return Promise.all([
+        api(`/projects/${encodeURIComponent(projectId)}/pairs`),
+        api(`/projects/${encodeURIComponent(projectId)}/pairs?archived=true`),
+      ]).then(([active, archivedPairs]) => {
+        if (!live || request !== pairRequest.current) return;
         setPairState((old) => {
           const selected = old.projectId === projectId ? old.selectedId : storedPair(projectId);
-          const selectedId = items.some((item) => item.id === selected) ? selected : items[0]?.id || null;
-          return { projectId, items, selectedId };
+          const selectedId = active.some((item) => item.id === selected) ? selected : active[0]?.id || null;
+          const previousArchive = old.projectId === projectId ? old.archivedId : null;
+          const archivedId = archivedPairs.some((item) => item.id === previousArchive) ? previousArchive : archivedPairs[0]?.id || null;
+          return { projectId, active, archived: archivedPairs, selectedId, archivedId };
         });
         setError("");
       })
-      .catch((e) => live && setError(e.message));
+      .catch((e) => live && request === pairRequest.current && setError(e.message));
+    };
     load();
     const poll = setInterval(() => {
       if (document.visibilityState === "visible") load();
@@ -347,7 +458,7 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onS
     if (projectId && !pairId) return;
     let live = true;
     const path = projectId
-      ? `/turns?project_id=${encodeURIComponent(projectId)}&pair_id=${pairId}&limit=10`
+      ? `/turns?project_id=${encodeURIComponent(projectId)}&pair_id=${pairId}&archived=${archived}&limit=10`
       : "/turns";
     const load = () => api(path)
       .then((items) => {
@@ -359,22 +470,48 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onS
       if (document.visibilityState === "visible") load();
     }, 20000);
     return () => { live = false; clearInterval(poll); };
-  }, [projectId, pairId, scope, reload]);
+  }, [projectId, pairId, archived, scope, reload]);
   function selectPair(id) {
-    rememberPair(projectId, id);
+    if (!archived) rememberPair(projectId, id);
     setError("");
-    setPairState((old) => ({ ...old, selectedId: id }));
+    setPairState((old) => ({ ...old, [archived ? "archivedId" : "selectedId"]: id }));
   }
   function savePair(next) {
+    pairRequest.current += 1;
     rememberPair(projectId, next.id);
     setPairState((old) => ({
+      ...old,
       projectId,
-      items: old.items.some((item) => item.id === next.id)
-        ? old.items.map((item) => item.id === next.id ? next : item)
-        : [...old.items, next],
+      active: old.active.some((item) => item.id === next.id)
+        ? old.active.map((item) => item.id === next.id ? next : item)
+        : [...old.active, next],
       selectedId: next.id,
     }));
     setReload((n) => n + 1);
+  }
+  function archivePair(next) {
+    pairRequest.current += 1;
+    const active = pairState.active.filter((item) => item.id !== next.id);
+    const selectedId = active[0]?.id || null;
+    rememberPair(projectId, selectedId);
+    setPairState((old) => ({
+      ...old, active, selectedId, archivedId: next.id,
+      archived: [...old.archived.filter((item) => item.id !== next.id), next],
+    }));
+    setReload((n) => n + 1);
+    onStatusChanged();
+  }
+  function restorePair(next) {
+    pairRequest.current += 1;
+    rememberPair(projectId, next.id);
+    setPairState((old) => ({
+      ...old, selectedId: next.id,
+      active: [...old.active.filter((item) => item.id !== next.id), next],
+      archived: old.archived.filter((item) => item.id !== next.id),
+    }));
+    setPairView({ projectId, archived: false });
+    setReload((n) => n + 1);
+    onStatusChanged();
   }
   if (!projectId && turns && !turns.length && !error) return fallback;
   const lastTurn = (turns || []).find((turn) => turn.role === "main" && !turn.automation);
@@ -385,7 +522,9 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onS
         <h2>{projectId ? projectNames[projectId] || "Agent turns" : "Latest agent turns"}</h2>
         <p>
           {projectId
-            ? "Each agent’s closing message for the selected pair, newest first."
+            ? archived
+              ? "Preserved closing messages for the archived pair."
+              : "Each agent’s closing message for the selected pair, newest first."
             : "The most recent turn in each pair, newest first. Closing messages are shown as the agents wrote them."}
         </p>
       </header>
@@ -396,22 +535,31 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onS
         </p>
       )}
       {projectId && pairs && (
-        <PairControls key={projectId} projectId={projectId} pairs={pairs} pair={pair}
-          onSelect={selectPair} onSaved={savePair} />
+        <PairControls key={`${projectId}:${archived}`} projectId={projectId} pairs={pairs} pair={pair}
+          archived={archived} counts={{ active: pairState.active.length, archived: pairState.archived.length }}
+          onViewChange={(view) => { setPairView({ projectId, archived: view }); setError(""); }}
+          onSelect={selectPair} onSaved={savePair} onArchived={archivePair} />
       )}
       {projectId && !pairs && !error && <p className="hint" role="status">Loading pairs…</p>}
-      {projectId && pair && (
-        <PairAttention key={`attention:${pair.id}:${lastTurn?.recorded_at || "none"}`} pairId={pair.id}
+      {projectId && pair && archived && <ArchivedPair key={`${projectId}:${pair.id}:${pair.state_token}`} pair={pair} onRestored={restorePair} />}
+      {projectId && pair && !archived && (
+        <PairAttention key={`attention:${pair.id}:${pair.state_token}:${lastTurn?.recorded_at || "none"}`} pairId={pair.id}
           revision={lastTurn?.recorded_at} onStatusChanged={onStatusChanged} />
       )}
-      {projectId && pair && turns && (
-        <NextTurn key={`${projectId}:${pair.id}`} pairId={pair.id} pairName={pair.name}
-          lastTurn={lastTurn} onPinsChanged={() => {
+      {projectId && pair && !archived && turns && (
+        <NextTurn key={`${projectId}:${pair.id}:${pair.state_token}`} pairId={pair.id} pairName={pair.name}
+          expectedState={pair.state_token} lastTurn={lastTurn} onPinsChanged={(next) => {
+            pairRequest.current += 1;
+            setPairState((old) => ({
+              ...old,
+              active: old.active.map((item) => item.id === pair.id ? { ...item, state_token: next.state_token } : item),
+            }));
             setReload((n) => n + 1);
             onStatusChanged();
           }} onStateChanged={onStatusChanged} />
       )}
-      {projectId && pair && turns?.length === 0 && <p className="hint">No turns from this pair yet. Choose its sessions under Pair sessions.</p>}
+      {projectId && pair && turns?.length === 0 && <p className="hint">{archived ? "No captured closing messages in this pair’s history." : "No turns from this pair yet. Choose its sessions under Pair sessions."}</p>}
+      {projectId && pair && archived && turns?.length > 0 && <h3 className="archived-turns-heading">Latest 10 closing messages</h3>}
       {(turns || []).map((turn, index) => (
         <article
           className={`message turn${turn.role === "other" || turn.automation ? " other-session" : ""}`}

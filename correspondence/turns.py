@@ -128,9 +128,12 @@ def project_sessions(directory: Path, project_id: str, pairs: list[dict], pins: 
         turn = annotate(raw, pairs, pins)
         key = (turn["agent"], turn["session_id"])
         if key not in sessions:
+            pair = next((p for p in pairs if p["id"] == turn["pair_id"]), None)
+            retired = bool(pair and pair.get("archived_at"))
             sessions[key] = {"agent": turn["agent"], "session_id": turn["session_id"], "last_at": turn["recorded_at"],
                              "turns": 0, "automation": turn["automation"], "pair_id": turn["pair_id"],
-                             "pair_name": turn["pair_name"], "excerpt": (turn["message"] or "")[:160], "machine": turn.get("machine")}
+                             "pair_name": turn["pair_name"] + " (archived)" if retired else turn["pair_name"],
+                             "pair_archived": retired, "excerpt": (turn["message"] or "")[:160], "machine": turn.get("machine")}
         sessions[key]["turns"] += 1
     return list(sessions.values())
 

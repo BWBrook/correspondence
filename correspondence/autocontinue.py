@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from .dispatch import deliver_here
 from .attention import pair_decisions
-from .store import Conflict
+from .store import Conflict, NotFound
 from .turns import continue_prompts, latest_limits, latest_main_turn, turn_key
 from .usage import highest
 
@@ -43,7 +43,10 @@ def step(store, history: list[dict]) -> list[str]:
     limits = {"Claude": store.limits("Claude"), "Codex": latest_limits(history, "Codex")}
     log = []
     for run in runs:
-        outcome = advance(store, run, history, pins, user, limits)
+        try:
+            outcome = advance(store, run, history, pins, user, limits)
+        except NotFound:
+            continue  # The pair or its project was archived after this round's snapshot.
         if outcome:
             log.append(f"{run['project_id']}/{run['pair_name']}: {outcome}")
     return log

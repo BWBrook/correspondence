@@ -312,3 +312,29 @@ verified at 390 pixels; discussion labels remain readable at both widths.
   and return navigation are available at both sizes; mobile has no document
   overflow. The production build was made with an isolated temporary outDir.
   No synthetic prompt or decision request was sent to a real agent.
+
+## Pair archives — 14 November 2026
+
+- 220 automated tests pass. Twelve new tests cover schema preservation,
+  independent archive/restore, claimed and unclaimed prompts, read-only history,
+  active routing/status, reserved names and sessions, archive-all behaviour,
+  stable seen snapshots and stale lifecycle actions. Existing raw-ledger turn
+  visibility is preserved for projects without a registered board section.
+- Schema 11 to 12 was rehearsed on a consistent private board copy. Every
+  existing table and column retained its rows exactly; SQLite integrity and
+  foreign keys pass. Archiving/restoring a completed pair preserved its pins,
+  discussion links and receipts and left its neighbouring pair unchanged.
+- Independent scratch checks verified that archived cancellation/configuration
+  writes reject while claimed delivery receipts can finish. Pre-archive browser
+  Send, pin, Auto-start and settings requests also reject after restoration,
+  without creating a dispatch/run or changing configuration.
+- Isolated browser QA verified archiving one of two running pairs, unchanged
+  state of its neighbour, retained history, cancellation of an unsent prompt,
+  read-only archive controls, restoration with Auto off, separate drafts and
+  selections, archived-session exclusion, archive-all recovery, and retained
+  linked discussions. Browser state-token handling was exercised through Save,
+  unpin/repin, Auto-start and a fake remote Send/Cancel.
+- Desktop and 390-pixel mobile archive views were inspected; no document
+  overflow was present. The interface labels its displayed history limits;
+  complete records remain stored. Builds and synthetic delivery stayed isolated
+  from the live board and real agent sessions.

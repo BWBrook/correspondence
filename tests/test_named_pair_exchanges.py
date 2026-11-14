@@ -33,7 +33,7 @@ def exchanges(tmp_path,monkeypatch):
     with TestClient(web.create_app(tmp_path),base_url='http://127.0.0.1:8765') as client:
         for pair,agents in sessions.items():
             for agent,session in agents.items():
-                assert client.post(f'/api/pairs/{pair}/agents',headers=HEADERS,json={'agent':agent,'session_id':session}).status_code==200
+                assert client.post(f'/api/pairs/{pair}/agents',headers=HEADERS,json={"expected_state": client.app.state.store.pair(pair)["state_token"], 'agent':agent,'session_id':session}).status_code==200
         yield store,client,a['id'],b['id'],sessions,turn,tmp_path
 
 
@@ -42,7 +42,7 @@ def test_interleaved_same_section_exchanges_use_only_their_pair(exchanges):
     turn(a,'Claude','HAZE ONLY\nNext: Codex',0)
     turn(b,'Claude','BUDYKO ONLY\nNext: Codex',1)
     for pair in (a,b):
-        response=client.post(f'/api/pairs/{pair}/auto',headers=HEADERS,json={'hops':2,'ceiling':80})
+        response=client.post(f'/api/pairs/{pair}/auto',headers=HEADERS,json={"expected_state": client.app.state.store.pair(pair)["state_token"], 'hops':2,'ceiling':80})
         assert response.status_code==200 and response.json()['hops_left']==1
     da=client.get(f'/api/dispatches?pair_id={a}').json();db=client.get(f'/api/dispatches?pair_id={b}').json()
     assert len(da)==len(db)==1 and da[0]['id']!=db[0]['id']
@@ -66,7 +66,7 @@ def test_stop_cancel_and_pin_changes_do_not_touch_the_other_pair(exchanges):
     store,client,a,b,sessions,turn,tmp=exchanges
     for pair in (a,b):
         turn(pair,'Codex',f'Finished {pair}\nNext: Claude')
-        assert client.post(f'/api/pairs/{pair}/auto',headers=HEADERS,json={'hops':3,'ceiling':80}).status_code==200
+        assert client.post(f'/api/pairs/{pair}/auto',headers=HEADERS,json={"expected_state": client.app.state.store.pair(pair)["state_token"], 'hops':3,'ceiling':80}).status_code==200
     da=store.list_dispatches(a)[0];db=store.list_dispatches(b)[0]
     assert da['status']==db['status']=='queued'
     assert store.claim_dispatch(db['id'])
@@ -74,7 +74,7 @@ def test_stop_cancel_and_pin_changes_do_not_touch_the_other_pair(exchanges):
     assert store.list_dispatches(a)[0]['status']=='failed'
     other=store.list_dispatches(b)[0]
     assert other['status']=='queued' and other['claimed_at'] and store.auto_continue(b)['running']
-    duplicate=client.post(f'/api/pairs/{a}/agents',headers=HEADERS,json={'agent':'Claude','session_id':sessions[b]['Claude']})
+    duplicate=client.post(f'/api/pairs/{a}/agents',headers=HEADERS,json={"expected_state": client.app.state.store.pair(a)["state_token"], 'agent':'Claude','session_id':sessions[b]['Claude']})
     assert duplicate.status_code==409
     assert store.pair_agents(a)['Claude']==sessions[a]['Claude']
     assert store.pair_agents(b)['Claude']==sessions[b]['Claude']
@@ -97,7 +97,7 @@ def test_discussion_links_and_section_boundaries_are_explicit(exchanges):
     assert client.get(f'/api/turns?pair_id={a}').json()[0]['discussions']==[]
     store.create_project('other','Other')
     foreign=store.create_thread('User','other','Foreign','Start')['id']
-    assert client.post(f'/api/pairs/{a}',headers=HEADERS,json={'discussion_ids':[foreign]}).status_code==422
+    assert client.post(f'/api/pairs/{a}',headers=HEADERS,json={"expected_state": client.app.state.store.pair(a)["state_token"], 'discussion_ids':[foreign]}).status_code==422
     assert client.get(f'/api/turns?project_id=other&pair_id={a}').status_code==404
 
 

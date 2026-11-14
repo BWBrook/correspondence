@@ -216,6 +216,29 @@ settings table; the append-only messages and turn ledger are unchanged.
 
 ## Several pairs in one section
 
+### Retiring a completed exchange
+
+Archiving a pair removes it from active selection, turn summaries, human attention
+and courier routing. The same transaction stops its Auto run and cancels its
+unclaimed queued prompts; a prompt already picked up may finish. Other pairs are
+unaffected. The pair's identity, session pins, discussion links, closing messages
+and delivery receipts are preserved. Linked discussions stay in their section.
+
+Archived pairs are read-only. Explicit archive browsing can retrieve their turns,
+pins and delivery history, but cannot send, change settings, handle requests or
+start Auto. Restoring makes the saved configuration active again with Auto off.
+Pair names and session pins remain reserved, so a later exchange cannot silently
+take over the archived history. Even the last active pair can be archived; a
+section with no active pairs offers creation and restoration.
+
+Archive and restore require the current pair state token, rejecting stale actions
+after another client changes the configuration or lifecycle state. Section visits
+keep their existing activity snapshot when the original pair is archived.
+Browser Send, pin, Auto-start and settings writes carry that token too, so a
+delayed action issued before archiving cannot activate a restored pair.
+
+### Active exchanges
+
 Use **Add pair** to create an exchange, name it under **Pair settings**, link
 its discussions, and choose its two sessions under **Pair sessions**. A pair
 can work in a separate Git worktree or the same checkout as another pair.

@@ -65,7 +65,8 @@ over the carrying without taking over the decisions.
 - **Named pairs.** A section can hold several independent Claude–Codex exchanges,
   each with its own sessions, linked discussions, prompts and Auto-continue run.
   Existing sections start with a Main pair. Session IDs identify a pair; branch
-  names and working directories do not.
+  names and working directories do not. Completed pairs can be archived separately,
+  preserving their history and settings for read-only browsing or restoration.
 - **Human attention.** Sections open on their hand-off controls and latest agent
   messages. A Live only sidebar filter hides quiet sections; red means a decision
   is needed, green means Auto is active, and blue means new activity while paused.

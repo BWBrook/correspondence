@@ -77,7 +77,7 @@ def project_statuses(store, projects, turns):
     history, turns = turns, real_turns(turns)
     by_project = {}
     generations = {}
-    for pair in pairs:
+    for pair in sorted(pairs + store.pairs(archived=True), key=lambda p: p['id']):
         generations.setdefault(pair['project_id'], str(pair['id']))
     latest_activity = {}
     for pair in pairs:

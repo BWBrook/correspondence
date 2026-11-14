@@ -47,7 +47,7 @@ function autoStatus(auto) {
   return "Prompts go when you press Send.";
 }
 
-function AutoControl({ pairId, auto, onChange }) {
+function AutoControl({ pairId, expectedState, auto, onChange }) {
   const mounted = useMounted();
   const [hops, setHops] = useState(6);
   const [ceiling, setCeiling] = useState(80);
@@ -75,7 +75,7 @@ function AutoControl({ pairId, auto, onChange }) {
         <span className="auto-form">
           <button
             disabled={busy}
-            onClick={() => change("auto", { hops, ceiling })}
+            onClick={() => change("auto", { hops, ceiling, expected_state: expectedState })}
             title="Send each turn's Continue prompt to the agent it names, without waiting for Send"
           >
             Auto-continue
@@ -118,7 +118,7 @@ function newerSession(agents, agent) {
   );
 }
 
-function MainSessions({ pairId, agents, onChange }) {
+function MainSessions({ pairId, expectedState, agents, onChange }) {
   const mounted = useMounted();
   const [error, setError] = useState("");
   async function pin(agent, session_id) {
@@ -127,6 +127,7 @@ function MainSessions({ pairId, agents, onChange }) {
       const next = await post(`/pairs/${pairId}/agents`, {
         agent,
         session_id: session_id || null,
+        expected_state: expectedState,
       });
       if (mounted.current) onChange(next);
     } catch (e) {
@@ -174,7 +175,7 @@ function MainSessions({ pairId, agents, onChange }) {
   );
 }
 
-export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged, onStateChanged }) {
+export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChanged, onStateChanged }) {
   const mounted = useMounted();
   const [agents, setAgents] = useState({
     pins: {},
@@ -254,10 +255,10 @@ export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged, onStateCha
   async function repin(agent, session_id) {
     setError("");
     try {
-      const next = await post(`/pairs/${pairId}/agents`, { agent, session_id });
+      const next = await post(`/pairs/${pairId}/agents`, { agent, session_id, expected_state: expectedState });
       if (!mounted.current) return;
       setAgents({ ...next, pair_id: pairId });
-      onPinsChanged();
+      onPinsChanged(next);
     } catch (e) {
       if (mounted.current) setError(e.message);
     }
@@ -280,6 +281,7 @@ export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged, onStateCha
         target,
         body: text,
         expected_pins: agents.pins,
+        expected_state: expectedState,
       });
       if (!mounted.current) return;
       setDispatches((list) => [result, ...list].slice(0, 5));
@@ -310,6 +312,7 @@ export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged, onStateCha
       </header>
       <AutoControl
         pairId={pairId}
+        expectedState={expectedState}
         auto={auto}
         onChange={(next) => {
           setAuto(next);
@@ -414,10 +417,11 @@ export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged, onStateCha
       )}
       <MainSessions
         pairId={pairId}
+        expectedState={expectedState}
         agents={agents}
         onChange={(next) => {
           setAgents({ ...next, pair_id: pairId });
-          onPinsChanged();
+          onPinsChanged(next);
         }}
       />
     </section>

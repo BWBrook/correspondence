@@ -167,13 +167,13 @@ def test_endpoints_start_stop_and_record_the_turn_each_prompt_follows(board):
     add_turn(board, "Claude", CLAUDE, "2026-11-07T01:00:00+00:00", "Reviewed.\nNext: Codex")
     with TestClient(create_app(board.directory), base_url="http://127.0.0.1:8765") as client:
         assert client.get(f"/api/pairs/{main_pair(board)}/auto").json()["running"] is False
-        started = client.post(f"/api/pairs/{main_pair(board)}/auto", json={"hops": 4, "ceiling": 85}, headers=HEADERS).json()
+        started = client.post(f"/api/pairs/{main_pair(board)}/auto", json={"expected_state": client.app.state.store.pair(main_pair(board))["state_token"], "hops": 4, "ceiling": 85}, headers=HEADERS).json()
         assert started["running"] and started["hops_left"] == 3  # the first hand-off went at once
         assert client.post(f"/api/pairs/{main_pair(board)}/auto/stop", json={}, headers=HEADERS).json()["running"] is False
-        assert client.post(f"/api/pairs/{main_pair(board)}/auto", json={"hops": 4}, headers=HEADERS).status_code == 422
+        assert client.post(f"/api/pairs/{main_pair(board)}/auto", json={"expected_state": client.app.state.store.pair(main_pair(board))["state_token"], "hops": 4}, headers=HEADERS).status_code == 422
         with board.connect(write=True) as con:
             con.execute("UPDATE dispatches SET delivered_at='2026-01-01T00:00:00+00:00'")
-        manual = client.post("/api/dispatches", json={"pair_id": main_pair(board), "expected_pins": board.pair_agents(main_pair(board)), "target": "Codex", "body": "x"}, headers=HEADERS).json()
+        manual = client.post("/api/dispatches", json={"expected_state": client.app.state.store.pair(main_pair(board))["state_token"], "pair_id": main_pair(board), "expected_pins": board.pair_agents(main_pair(board)), "target": "Codex", "body": "x"}, headers=HEADERS).json()
         assert manual["origin"] is None and manual["after_turn"] == f"{CLAUDE}@2026-11-07T01:00:00+00:00"
         assert client.get("/api/usage?project_id=p").json() == {"limits": {"Claude": None, "Codex": None}, "days": []}
         assert set(client.get("/api/turns?project_id=p").json()[0]["continue_prompts"]) == {"short", "full"}

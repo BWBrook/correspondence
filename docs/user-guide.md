@@ -95,6 +95,28 @@ ssh -N -L 8765:127.0.0.1:8765 <board-host>
 Then open the same URL locally. Port 8765 must be free on the client. No public server or port
 forwarding is needed. This repository does not change SSH or Tailscale settings.
 
+## Archive a completed pair
+
+Within a section, select the finished pair, open **Pair settings**, then choose
+**Archive pair**. Its Auto run stops and queued prompts that have not been picked
+up are withdrawn. An in-flight prompt or running agent may finish. Other pairs
+keep their own state and controls.
+
+Choose **Archived pairs** beside the pair controls to browse the saved closing
+messages, session pins and delivery history. This view is read-only. **Restore
+pair** brings back its configuration with Auto off; **Active pairs** returns to
+current exchanges. Archive browsing keeps your active selection separate.
+The view shows the latest ten closing messages and latest 100 deliveries; the
+complete records remain stored.
+
+Archiving preserves the pair and its history. Its linked discussions stay in the
+section, and its name and session pins remain reserved. A new exchange uses a
+new name and sessions; restore the old pair if you want to continue it. A section
+can have no active pairs: **Add pair** and **Archived pairs** remain available.
+
+Archived pairs no longer appear in active turn summaries, Auto runs or sidebar
+attention. Archiving a pair does not archive its section or discussions.
+
 ## Archive a project section
 
 Choose **Archive project…** in a project's discussion list. The section leaves

@@ -19,7 +19,7 @@ LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 AUTO_HOPS = (1, 50)
 AUTO_CEILING = (10, 100)
 STALE_CLAIM_SECONDS = 120
@@ -180,6 +180,12 @@ class Store:
                 con.execute("PRAGMA user_version=10")
             if version < 11:
                 cls._upgrade_pairs(con)
+                con.execute("PRAGMA user_version=11")
+            if version < 12:
+                con.execute("ALTER TABLE pairs ADD COLUMN archived_at TEXT")
+                con.execute("ALTER TABLE pairs ADD COLUMN state_token TEXT")
+                for row in con.execute("SELECT id FROM pairs").fetchall():
+                    con.execute("UPDATE pairs SET state_token=? WHERE id=?", (uuid4().hex, row["id"]))
                 con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             con.commit()
         except Exception:
@@ -484,6 +490,8 @@ class Store:
         con.execute("UPDATE projects SET id=? WHERE id=?", (new_id, old_id))
         con.execute("UPDATE threads SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("UPDATE pairs SET project_id=? WHERE project_id=?", (new_id, old_id))
+        for pair in con.execute("SELECT id FROM pairs WHERE project_id=?", (new_id,)).fetchall():
+            con.execute("UPDATE pairs SET state_token=? WHERE id=?", (uuid4().hex, pair["id"]))
         con.execute("UPDATE dispatches SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("""UPDATE auto_continue SET stopped_at=?, stopped_reason='The project was archived or restored'
             WHERE pair_id IN (SELECT id FROM pairs WHERE project_id=?) AND stopped_at IS NULL""", (now(), new_id))
@@ -551,11 +559,16 @@ class Store:
             return self._require(con, "projects", restored_id)
 
     @staticmethod
-    def _pair(con, pair_id):
+    def _pair(con, pair_id, *, archived=False, expected_state=None):
         if type(pair_id) is not int or pair_id < 1:
             raise ValueError("Pair id must be a positive integer")
         pair = Store._require(con, "pairs", pair_id)
         Store._project(con, pair["project_id"])
+        Store._archive_flag(archived)
+        if (pair["archived_at"] is not None) != archived:
+            raise NotFound("Not found")
+        if expected_state is not None and pair["state_token"] != expected_state:
+            raise Conflict("Pair state changed; refresh before trying again")
         pair["discussion_ids"] = [r[0] for r in con.execute(
             "SELECT thread_id FROM pair_discussions WHERE pair_id=? ORDER BY thread_id", (pair_id,))]
         return pair
@@ -571,17 +584,50 @@ class Store:
                 raise ValueError("Every discussion must belong to the pair's project")
         return ids
 
-    def pairs(self, project_id=None):
+    def pairs(self, project_id=None, *, archived=False):
+        self._archive_flag(archived)
         with self.connect() as con:
             if project_id is not None:
                 self._project(con, project_id)
             rows = con.execute("""SELECT a.* FROM pairs a JOIN projects p ON p.id=a.project_id
-                WHERE p.archived_at IS NULL""" + (" AND a.project_id=?" if project_id is not None else "")
-                + " ORDER BY a.id", (project_id,) if project_id is not None else ()).fetchall()
-            return [self._pair(con, row["id"]) for row in rows]
+                WHERE p.archived_at IS NULL AND (a.archived_at IS NOT NULL)=?"""
+                + (" AND a.project_id=?" if project_id is not None else "") + " ORDER BY a.id",
+                (archived, project_id) if project_id is not None else (archived,)).fetchall()
+            return [self._pair(con, row["id"], archived=archived) for row in rows]
 
-    def pair(self, pair_id):
+    def pair(self, pair_id, *, archived=False):
         with self.connect() as con:
+            return self._pair(con, pair_id, archived=archived)
+
+    @staticmethod
+    def _pair_state(con, pair_id, expected_state):
+        if type(pair_id) is not int or pair_id < 1:
+            raise ValueError("Pair id must be a positive integer")
+        pair = Store._require(con, "pairs", pair_id)
+        Store._project(con, pair["project_id"])
+        if not isinstance(expected_state, str) or pair["state_token"] != expected_state:
+            raise Conflict("Pair state changed; refresh before trying again")
+        return pair
+
+    def archive_pair(self, pair_id, expected_state):
+        with self.connect(write=True) as con:
+            pair = self._pair_state(con, pair_id, expected_state)
+            if pair["archived_at"] is not None:
+                raise Conflict("Pair state changed; refresh before trying again")
+            moment = now()
+            con.execute("UPDATE pairs SET archived_at=?,state_token=? WHERE id=?", (moment, uuid4().hex, pair_id))
+            con.execute("""UPDATE auto_continue SET stopped_at=?,stopped_reason='The pair was archived'
+                WHERE pair_id=? AND stopped_at IS NULL""", (moment, pair_id))
+            con.execute("""UPDATE dispatches SET status='failed',detail='Cancelled: pair archived'
+                WHERE pair_id=? AND status='queued' AND claimed_at IS NULL""", (pair_id,))
+            return self._pair(con, pair_id, archived=True)
+
+    def restore_pair(self, pair_id, expected_state):
+        with self.connect(write=True) as con:
+            pair = self._pair_state(con, pair_id, expected_state)
+            if pair["archived_at"] is None:
+                raise Conflict("Pair state changed; refresh before trying again")
+            con.execute("UPDATE pairs SET archived_at=NULL,state_token=? WHERE id=?", (uuid4().hex, pair_id))
             return self._pair(con, pair_id)
 
     def create_pair(self, project_id, name, discussion_ids=()):
@@ -589,21 +635,23 @@ class Store:
         with self.connect(write=True) as con:
             self._project(con, project_id)
             ids = self._pair_discussions(con, project_id, discussion_ids)
-            existing = con.execute("SELECT id FROM pairs WHERE project_id=? AND name=? COLLATE NOCASE", (project_id, name)).fetchone()
+            existing = con.execute("SELECT id,archived_at FROM pairs WHERE project_id=? AND name=? COLLATE NOCASE", (project_id, name)).fetchone()
             if existing:
+                if existing["archived_at"] is not None:
+                    raise Conflict("That pair name is reserved by an archived pair; restore it or choose another name")
                 pair = self._pair(con, existing["id"])
                 if pair["discussion_ids"] != ids:
                     raise Conflict("Pair name already exists with different discussions")
                 return pair
-            pair_id = con.execute("INSERT INTO pairs(project_id,name) VALUES (?,?)", (project_id, name)).lastrowid
+            pair_id = con.execute("INSERT INTO pairs(project_id,name,state_token) VALUES (?,?,?)", (project_id, name, uuid4().hex)).lastrowid
             con.executemany("INSERT INTO pair_discussions(pair_id,thread_id) VALUES (?,?)", [(pair_id,i) for i in ids])
             return self._pair(con, pair_id)
 
-    def update_pair(self, pair_id, name=None, discussion_ids=None):
+    def update_pair(self, pair_id, name=None, discussion_ids=None, *, expected_state=None):
         if name is not None:
             name = clean_text(name, "Pair name", 100)
         with self.connect(write=True) as con:
-            pair = self._pair(con, pair_id)
+            pair = self._pair(con, pair_id, expected_state=expected_state)
             if name is not None:
                 if con.execute("SELECT 1 FROM pairs WHERE project_id=? AND name=? COLLATE NOCASE AND id!=?",
                                (pair["project_id"],name,pair_id)).fetchone():
@@ -613,33 +661,35 @@ class Store:
                 ids = self._pair_discussions(con, pair["project_id"], discussion_ids)
                 con.execute("DELETE FROM pair_discussions WHERE pair_id=?", (pair_id,))
                 con.executemany("INSERT INTO pair_discussions(pair_id,thread_id) VALUES (?,?)", [(pair_id,i) for i in ids])
+            con.execute("UPDATE pairs SET state_token=? WHERE id=?", (uuid4().hex, pair_id))
             return self._pair(con, pair_id)
 
-    def pair_agents(self, pair_id=None):
+    def pair_agents(self, pair_id=None, *, archived=False):
+        self._archive_flag(archived)
         with self.connect() as con:
             if pair_id is not None:
-                self._pair(con, pair_id)
+                self._pair(con, pair_id, archived=archived)
             rows = con.execute("""SELECT a.pair_id,a.agent,a.session_id FROM pair_agents a
                 JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
-                WHERE p.archived_at IS NULL""" + (" AND a.pair_id=?" if pair_id is not None else ""),
-                (pair_id,) if pair_id is not None else ()).fetchall()
+                WHERE p.archived_at IS NULL AND (b.archived_at IS NOT NULL)=?""" + (" AND a.pair_id=?" if pair_id is not None else ""),
+                (archived, pair_id) if pair_id is not None else (archived,)).fetchall()
         pins = {}
         for row in rows:
             pins.setdefault(row["pair_id"], {})[row["agent"]] = row["session_id"]
         return pins.get(pair_id, {}) if pair_id is not None else pins
 
-    def pair_machines(self, pair_id):
+    def pair_machines(self, pair_id, *, archived=False):
         with self.connect() as con:
-            self._pair(con, pair_id)
+            self._pair(con, pair_id, archived=archived)
             return {r["agent"]:r["machine"] for r in con.execute("SELECT agent,machine FROM pair_agents WHERE pair_id=?", (pair_id,))}
 
     def machine_pins(self, machine):
         with self.connect() as con:
             return [dict(row) for row in con.execute("""SELECT a.pair_id,b.project_id,a.agent,a.session_id
                 FROM pair_agents a JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
-                WHERE a.machine=? AND p.archived_at IS NULL ORDER BY b.project_id,a.pair_id,a.agent""", (machine,))]
+                WHERE a.machine=? AND p.archived_at IS NULL AND b.archived_at IS NULL ORDER BY b.project_id,a.pair_id,a.agent""", (machine,))]
 
-    def set_pair_agent(self, pair_id, agent, session_id, machine=None):
+    def set_pair_agent(self, pair_id, agent, session_id, machine=None, *, expected_state=None):
         if agent not in DISPATCH_TARGETS:
             raise ValueError("Agent must be Claude or Codex")
         if session_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{7,99}", session_id):
@@ -647,7 +697,7 @@ class Store:
         if machine is not None and not MACHINE_RE.fullmatch(machine):
             raise ValueError("Machine must be a short lowercase name")
         with self.connect(write=True) as con:
-            pair = self._pair(con, pair_id)
+            pair = self._pair(con, pair_id, expected_state=expected_state)
             if session_id is not None and con.execute("""SELECT 1 FROM pair_agents a JOIN pairs p ON p.id=a.pair_id
                 WHERE p.project_id=? AND a.agent=? AND a.session_id=? AND a.pair_id!=?""",
                 (pair["project_id"],agent,session_id,pair_id)).fetchone():
@@ -656,6 +706,7 @@ class Store:
             changed = (previous is not None or session_id is not None) and (previous is None or
                 (previous["session_id"],previous["machine"]) != (session_id,machine))
             if changed:
+                con.execute("UPDATE pairs SET state_token=? WHERE id=?", (uuid4().hex, pair_id))
                 con.execute("""UPDATE auto_continue SET stopped_at=?,stopped_reason='A main session changed'
                     WHERE pair_id=? AND stopped_at IS NULL""", (now(),pair_id))
                 con.execute("""UPDATE dispatches SET status='failed',detail='Cancelled: the pair’s main sessions changed'
@@ -670,7 +721,7 @@ class Store:
                     (pair_id,agent,session_id,now(),machine))
         return self.pair_agents(pair_id)
 
-    def create_dispatch(self, pair_id, target, body, after_turn=None, run=None, *, expected_pins=None):
+    def create_dispatch(self, pair_id, target, body, after_turn=None, run=None, *, expected_pins=None, expected_state=None):
         """Record a prompt for a pair's main agent; refuse one while another to it is in flight.
 
         ``after_turn`` names the pair's latest main turn when the prompt was
@@ -686,7 +737,7 @@ class Store:
             raise ValueError("Target must be Claude or Codex")
         body = clean_text(body, "Prompt", 50_000)
         with self.connect(write=True) as con:
-            pair = self._pair(con, pair_id)
+            pair = self._pair(con, pair_id, expected_state=expected_state)
             if expected_pins is not None:
                 current_pins = {r["agent"]:r["session_id"] for r in con.execute(
                     "SELECT agent,session_id FROM pair_agents WHERE pair_id=?", (pair_id,))}
@@ -736,7 +787,9 @@ class Store:
             return [dict(r) for r in con.execute(
                 """SELECT d.*,b.name AS pair_name,EXISTS(SELECT 1 FROM dispatches p WHERE p.session_id=d.session_id
                 AND p.status='delivered') AS primed FROM dispatches d JOIN pairs b ON b.id=d.pair_id
+                JOIN projects p ON p.id=b.project_id
                 WHERE d.target=? AND d.machine IS ? AND d.status='queued' AND d.claimed_at IS NULL
+                AND b.archived_at IS NULL AND p.archived_at IS NULL
                 ORDER BY d.id""", (target, machine))]
 
     def agent_posts(self, project_id, agent, after, through):
@@ -763,7 +816,9 @@ class Store:
         delivery; False if already taken. A claimed prompt is never handed out again."""
         with self.connect(write=True) as con:
             return con.execute("""UPDATE dispatches SET claimed_at=? WHERE id=? AND machine IS ? AND status='queued'
-                AND claimed_at IS NULL""", (now(), dispatch_id, machine)).rowcount == 1
+                AND claimed_at IS NULL AND EXISTS(SELECT 1 FROM pairs b JOIN projects p ON p.id=b.project_id
+                    WHERE b.id=dispatches.pair_id AND b.archived_at IS NULL AND p.archived_at IS NULL)""",
+                    (now(), dispatch_id, machine)).rowcount == 1
 
     def cancel_dispatch(self, dispatch_id):
         """Withdraw a prompt not yet picked up, or give up on one picked up but never reported.
@@ -774,6 +829,7 @@ class Store:
         """
         with self.connect(write=True) as con:
             dispatch = self._require(con, "dispatches", dispatch_id)
+            self._pair(con, dispatch["pair_id"])
             user = self._user_name(con)
             if dispatch["status"] != "queued":
                 raise Conflict("This prompt has already been delivered or has failed")
@@ -804,14 +860,14 @@ class Store:
             self._pair(con, pair_id)
             return self._auto(con, pair_id)
 
-    def start_auto(self, pair_id, hops, ceiling):
+    def start_auto(self, pair_id, hops, ceiling, *, expected_state=None):
         """Start auto-continue for ``hops`` hand-offs, stopping at ``ceiling`` percent of any plan limit."""
         if not (type(hops) is int and AUTO_HOPS[0] <= hops <= AUTO_HOPS[1]):
             raise ValueError(f"Hand-offs must be {AUTO_HOPS[0]}–{AUTO_HOPS[1]}")
         if not (type(ceiling) is int and AUTO_CEILING[0] <= ceiling <= AUTO_CEILING[1]):
             raise ValueError(f"The limit ceiling must be {AUTO_CEILING[0]}–{AUTO_CEILING[1]}%")
         with self.connect(write=True) as con:
-            self._pair(con, pair_id)
+            self._pair(con, pair_id, expected_state=expected_state)
             pins = {row[0] for row in con.execute("SELECT agent FROM pair_agents WHERE pair_id=?", (pair_id,))}
             if pins != DISPATCH_TARGETS:
                 raise Conflict("Choose both main sessions before starting auto-continue")
@@ -845,7 +901,7 @@ class Store:
             return [{**dict(row), "running": True} for row in con.execute(
                 """SELECT a.*,b.project_id,b.name AS pair_name,p.name FROM auto_continue a
                 JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
-                WHERE a.stopped_at IS NULL AND p.archived_at IS NULL""")]
+                WHERE a.stopped_at IS NULL AND p.archived_at IS NULL AND b.archived_at IS NULL""")]
 
     def failed_since(self, pair_id, since):
         """The newest prompt in the pair that failed or was cancelled after ``since``, if any."""
@@ -884,9 +940,9 @@ class Store:
             row = con.execute("SELECT value FROM settings WHERE key=?", (f"limits.{agent}",)).fetchone()
             return json.loads(row[0]) if row else None
 
-    def list_dispatches(self, pair_id, limit=10):
+    def list_dispatches(self, pair_id, limit=10, *, archived=False):
         with self.connect() as con:
-            self._pair(con, pair_id)
+            self._pair(con, pair_id, archived=archived)
             return [dict(row) for row in con.execute(
                 "SELECT * FROM dispatches WHERE pair_id=? ORDER BY id DESC LIMIT ?", (pair_id, limit))]
 
@@ -906,7 +962,7 @@ class Store:
                     raise Conflict("Project slug already exists with different details")
                 return dict(existing)
             con.execute("INSERT INTO projects(id,name,description,repo_path,created_at,state_token) VALUES (?,?,?,?,?,?)", (id, name, description, repo_path, now(), uuid4().hex))
-            con.execute("INSERT INTO pairs(project_id,name) VALUES (?,'Main')", (id,))
+            con.execute("INSERT INTO pairs(project_id,name,state_token) VALUES (?,'Main',?)", (id, uuid4().hex))
             return self._require(con, "projects", id)
 
     def list_projects(self, author, *, archived=False):
@@ -1036,10 +1092,11 @@ class Store:
             values = {r["key"]: json.loads(r["value"]) for r in con.execute(
                 "SELECT key,value FROM settings WHERE key LIKE 'human.seen.%' OR key LIKE 'human.handled.%'")}
             runs = {r["pair_id"]: dict(r) for r in con.execute("""SELECT a.* FROM auto_continue a
-                JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id WHERE p.archived_at IS NULL""")}
+                JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
+                WHERE p.archived_at IS NULL AND b.archived_at IS NULL""")}
             dispatches = [dict(r) for r in con.execute("""SELECT d.* FROM dispatches d
                 JOIN pairs b ON b.id=d.pair_id JOIN projects p ON p.id=b.project_id
-                WHERE p.archived_at IS NULL AND d.status IN ('queued','delivered')""")]
+                WHERE p.archived_at IS NULL AND b.archived_at IS NULL AND d.status IN ('queued','delivered')""")]
         return {"seen": {k.removeprefix("human.seen."): v for k, v in values.items() if k.startswith("human.seen.")},
                 "handled": {k.removeprefix("human.handled."): v for k, v in values.items() if k.startswith("human.handled.")},
                 "runs": runs, "dispatches": dispatches}

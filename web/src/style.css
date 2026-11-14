@@ -1506,6 +1506,67 @@ dialog::backdrop {
 .decision-requests > .hint {
   margin: 12px 0 0;
 }
+.pair-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.pair-views button {
+  font-size: 13px;
+}
+.pair-archive-action {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 12px;
+}
+.pair-archive-action .hint {
+  max-width: 700px;
+}
+.archived-pair {
+  background: var(--sidebar);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.archived-pair-heading {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.archived-pair-heading button {
+  flex-shrink: 0;
+}
+.archived-pair summary {
+  color: var(--teal);
+  cursor: pointer;
+  font-size: 13px;
+}
+.archived-pair > details {
+  margin-top: 14px;
+}
+.archived-pair code,
+.archived-pair pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.archived-pair-sessions p {
+  font-size: 13px;
+}
+.archived-pair-deliveries .dispatches li {
+  flex-wrap: wrap;
+}
+.archived-pair-deliveries li > details {
+  flex-basis: 100%;
+  min-width: 0;
+}
+.archived-pair-deliveries pre {
+  font-size: 12px;
+  line-height: 1.6;
+}
 @media (max-width: 1150px) {
   .controls-view {
     grid-template-columns: 185px minmax(0, 1fr);
@@ -1521,6 +1582,10 @@ dialog::backdrop {
   }
 }
 @media (max-width: 560px) {
+  .archived-pair-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
   .project-filter {
     display: flex;
     gap: 18px;

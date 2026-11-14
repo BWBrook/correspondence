@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_here, messenger_listening, remote_claude_session
-from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_pair,
+from .turns import (annotate, answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_pair,
                     link_discussions, project_sessions, project_turns, read_turns, turn_key)
 from . import attention, autocontinue
 
@@ -68,6 +68,7 @@ class StatusChange(Payload):
 
 
 class AgentPin(Payload):
+    expected_state: str
     agent: str
     session_id: str | None
 
@@ -78,11 +79,13 @@ class PairCreate(Payload):
 
 
 class PairUpdate(Payload):
+    expected_state: str
     name: str | None = None
     discussion_ids: list[int] | None = None
 
 
 class DispatchCreate(Payload):
+    expected_state: str
     pair_id: int
     expected_pins: dict[str, str]
     target: str
@@ -94,6 +97,7 @@ class DecisionHandle(Payload):
 
 
 class AutoStart(Payload):
+    expected_state: str
     hops: int
     ceiling: int
 
@@ -229,18 +233,29 @@ def create_app(data_dir=None, dist_dir=None):
         return PlainTextResponse(store().export_thread(USER, thread_id, archived=archived), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
 
     @app.get("/api/turns")
-    def turns(project_id: str | None = None, pair_id: int | None = Query(None, ge=1), limit: int = Query(10, ge=1, le=200)):
-        history, pairs, pins, user = read_turns(store().directory), store().pairs(), store().pair_agents(), store().user_name()
+    def turns(project_id: str | None = None, pair_id: int | None = Query(None, ge=1), limit: int = Query(10, ge=1, le=200), archived: bool = False):
+        history, user = read_turns(store().directory), store().user_name()
+        active, retired = store().pairs(), store().pairs(archived=True)
+        all_pairs = active + retired
+        all_pins = store().pair_agents() | store().pair_agents(archived=True)
+        names = {p["id"]: p["name"] for p in store().list_projects(USER)}
+        if archived and pair_id is None:
+            raise ValueError("Choose an archived pair to read its history")
         if pair_id is not None:
-            pair = store().pair(pair_id)
+            pair = store().pair(pair_id, archived=archived)
             if project_id is not None and pair["project_id"] != project_id:
                 raise NotFound("This pair is not in the selected section")
             project_id = pair["project_id"]
-        listed = project_turns(history, project_id, limit, pairs, pins, user, pair_id) if project_id else latest_per_pair(history, pairs, pins, user)
-        names = {p["id"]: p["name"] for p in store().list_projects(USER)}
+        pairs = retired if archived else active
+        pins = store().pair_agents(archived=archived)
+        retired_ids = {p["id"] for p in retired}
+        visible = history if archived else [t for t in history
+            if annotate(t, all_pairs, all_pins, user)["pair_id"] not in retired_ids]
+        listed = project_turns(visible, project_id, limit, pairs, pins, user, pair_id) if project_id else latest_per_pair(visible, pairs, pins, user)
         for turn in listed:
-            turn["continue_prompts"] = continue_prompts(turn, names.get(turn["project"], turn["project"]), user)
-        return link_discussions(listed, history, store().agent_posts, pairs)
+            if not archived:
+                turn["continue_prompts"] = continue_prompts(turn, names.get(turn["project"], turn["project"]), user)
+        return link_discussions(listed, history, store().agent_posts, all_pairs)
 
     @app.get("/api/usage")
     def usage(project_id: str | None = None, days: int = Query(7, ge=1, le=60)):
@@ -249,8 +264,8 @@ def create_app(data_dir=None, dist_dir=None):
                 "days": daily_usage(history, project_id, days)}
 
     @app.get("/api/projects/{project_id}/pairs")
-    def pairs(project_id: str):
-        return store().pairs(project_id)
+    def pairs(project_id: str, archived: bool = False):
+        return store().pairs(project_id, archived=archived)
 
     @app.post("/api/projects/{project_id}/pairs", status_code=201)
     def create_pair(project_id: str, payload: PairCreate):
@@ -258,7 +273,15 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.post("/api/pairs/{pair_id}")
     def update_pair(pair_id: int, payload: PairUpdate):
-        return store().update_pair(pair_id, payload.name, payload.discussion_ids)
+        return store().update_pair(pair_id, payload.name, payload.discussion_ids, expected_state=payload.expected_state)
+
+    @app.post("/api/pairs/{pair_id}/archive")
+    def archive_pair(pair_id: int, payload: ProjectState):
+        return store().archive_pair(pair_id, payload.expected_state)
+
+    @app.post("/api/pairs/{pair_id}/restore")
+    def restore_pair(pair_id: int, payload: ProjectState):
+        return store().restore_pair(pair_id, payload.expected_state)
 
     @app.get("/api/pairs/{pair_id}/auto")
     def auto_continue(pair_id: int):
@@ -266,7 +289,7 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.post("/api/pairs/{pair_id}/auto")
     def start_auto(pair_id: int, payload: AutoStart):
-        store().start_auto(pair_id, payload.hops, payload.ceiling)
+        store().start_auto(pair_id, payload.hops, payload.ceiling, expected_state=payload.expected_state)
         run_autos()
         return store().auto_continue(pair_id)
 
@@ -275,16 +298,21 @@ def create_app(data_dir=None, dist_dir=None):
         return store().stop_auto(pair_id)
 
     @app.get("/api/pairs/{pair_id}/agents")
-    def pair_agents(pair_id: int):
-        pair = store().pair(pair_id)
+    def pair_agents(pair_id: int, archived: bool = False):
+        pair = store().pair(pair_id, archived=archived)
         directory = store().directory
-        pins, machines = store().pair_agents(pair_id), store().pair_machines(pair_id)
+        pins, machines = store().pair_agents(pair_id, archived=archived), store().pair_machines(pair_id, archived=archived)
+        if archived:
+            return {"pins": pins, "machines": machines, "sessions": [], "primed": {},
+                    "claude_live": None, "messenger_listening": False, "couriers": {}}
+        pairs = store().pairs() + store().pairs(archived=True)
+        memberships = store().pair_agents() | store().pair_agents(archived=True)
         claude_machine = machines.get("Claude")
         live = None if "Claude" not in pins else (claude_session(pins["Claude"]) if claude_machine is None
                                                   else remote_claude_session(directory, claude_machine, pins["Claude"]))
         primed = store().primed_sessions(pins.values())
-        return {"pins": pins, "machines": machines,
-                "sessions": project_sessions(directory, pair["project_id"], store().pairs(), store().pair_agents()),
+        return {"pins": pins, "machines": machines, "state_token": pair["state_token"],
+                "sessions": project_sessions(directory, pair["project_id"], pairs, memberships),
                 "primed": {agent: session in primed for agent, session in pins.items()},
                 "claude_live": live, "messenger_listening": messenger_listening(directory, claude_machine),
                 "couriers": {m: courier_online(directory, m) for m in set(machines.values()) if m}}
@@ -292,24 +320,26 @@ def create_app(data_dir=None, dist_dir=None):
     @app.post("/api/pairs/{pair_id}/agents")
     def set_pair_agent(pair_id: int, payload: AgentPin):
         pair = store().pair(pair_id)
-        sessions = project_sessions(store().directory, pair["project_id"], store().pairs(), store().pair_agents())
+        sessions = project_sessions(store().directory, pair["project_id"],
+                                    store().pairs() + store().pairs(archived=True),
+                                    store().pair_agents() | store().pair_agents(archived=True))
         session = next((s for s in sessions if s["agent"] == payload.agent and s["session_id"] == payload.session_id), None)
         if payload.session_id is not None and session is None:
             raise NotFound("That session has no recorded turn in this section")
-        store().set_pair_agent(pair_id, payload.agent, payload.session_id, session["machine"] if session else None)
+        store().set_pair_agent(pair_id, payload.agent, payload.session_id, session["machine"] if session else None, expected_state=payload.expected_state)
         return pair_agents(pair_id)
 
     @app.get("/api/dispatches")
-    def dispatches(pair_id: int = Query(..., ge=1), limit: int = Query(10, ge=1, le=100)):
+    def dispatches(pair_id: int = Query(..., ge=1), limit: int = Query(10, ge=1, le=100), archived: bool = False):
         turns = read_turns(store().directory)
         return [{**d, "answered_at": answered_at(turns, d) if d["status"] == "delivered" else None}
-                for d in store().list_dispatches(pair_id, limit)]
+                for d in store().list_dispatches(pair_id, limit, archived=archived)]
 
     @app.post("/api/dispatches", status_code=201)
     def create_dispatch(payload: DispatchCreate):
         pair = store().pair(payload.pair_id)
         latest = latest_main_turn(read_turns(store().directory), pair, store().pair_agents(), store().user_name())
-        dispatch = store().create_dispatch(payload.pair_id, payload.target, payload.body, after_turn=turn_key(latest), expected_pins=payload.expected_pins)
+        dispatch = store().create_dispatch(payload.pair_id, payload.target, payload.body, after_turn=turn_key(latest), expected_pins=payload.expected_pins, expected_state=payload.expected_state)
         return {**deliver_here(store(), dispatch), "answered_at": None}
 
     @app.post("/api/dispatches/{dispatch_id}/cancel")
