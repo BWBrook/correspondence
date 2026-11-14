@@ -283,3 +283,8 @@ Correspondence discussion "Board review after five weeks (2026-10-10)".
   until deployment. Synthetic exchanges ran only on the isolated QA board.
   Live session setup and delivery receipts belong in the private infrastructure
   record rather than this public source repository.
+
+The final layout check also corrected checkbox sizing inherited from generic
+input styles and added mobile navigation between discussions and agent turns.
+Mobile pair selection, settings, Auto/Send access and return navigation were
+verified at 390 pixels; discussion labels remain readable at both widths.

@@ -251,7 +251,7 @@ function PairControls({ projectId, pairs, pair, onSelect, onSaved }) {
   );
 }
 
-export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback }) {
+export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, fallback }) {
   const [pairState, setPairState] = useState({ projectId: null, items: null, selectedId: null });
   const [turnState, setTurnState] = useState({ scope: null, items: null });
   const [error, setError] = useState("");
@@ -319,6 +319,7 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
   return (
     <main className="reader turns-panel" aria-label="Agent turns">
       <header className="turns-header">
+        <button className="outline mobile-turns" onClick={onBack}>Back to discussions</button>
         <h2>{projectId ? "Recent agent turns" : "Latest agent turns"}</h2>
         <p>
           {projectId

@@ -121,6 +121,7 @@ function Board({ route, navigate }) {
   const [threads, setThreads] = useState([]);
   const threadId = route.threadId;
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [showTurns, setShowTurns] = useState(false);
   const [searchScope, setSearchScope] = useState(null);
   const [markingAll, setMarkingAll] = useState(false),
     [readAllNotice, setReadAllNotice] = useState(""),
@@ -253,9 +254,11 @@ function Board({ route, navigate }) {
     if (!route.threadId) setProjectId(route.projectId);
   }, [route.projectId, route.threadId]);
   function selectThread(id) {
+    setShowTurns(false);
     navigate(id);
   }
   function selectProject(id) {
+    setShowTurns(false);
     if (currentProject.current !== id) {
       listRequest.current += 1;
       setThreads([]);
@@ -332,7 +335,7 @@ function Board({ route, navigate }) {
     </main>
   );
   return (
-    <div className={`app ${threadId ? "reading" : ""}`}>
+    <div className={`app ${threadId || (showTurns && !archived) ? "reading" : ""}`}>
       <aside className="sidebar">
         <a className="brand" href="/">
           Correspondence
@@ -492,6 +495,11 @@ function Board({ route, navigate }) {
                 ? "Search archive"
                 : "Search board"}
           </button>
+          {!archived && (
+            <button className="outline mobile-turns" onClick={() => setShowTurns(true)}>
+              Agent turns &amp; hand-offs
+            </button>
+          )}
           <div className="tabs">
             <button
               className={!unreadOnly ? "active" : ""}
@@ -644,7 +652,8 @@ function Board({ route, navigate }) {
         <TurnsPanel
           projectId={projectId}
           projectNames={projectNames}
-          onOpenProject={selectProject}
+          onOpenProject={(id) => { selectProject(id); setShowTurns(true); }}
+          onBack={() => setShowTurns(false)}
           fallback={emptyReader}
         />
       ) : (
