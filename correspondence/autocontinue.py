@@ -1,8 +1,8 @@
-"""Auto-continue: the board carries a project's hand-offs itself, within limits the user sets.
+"""Auto-continue: the board carries a named pair's hand-offs itself, within limits the user sets.
 
 The user starts a run from the browser with a number of hand-offs and a
 plan-limit ceiling. While it runs, whenever the latest turn from one of the
-project's main sessions declares ``Next: Claude`` or ``Next: Codex`` and no
+pair's main sessions declares ``Next: Claude`` or ``Next: Codex`` and no
 prompt has been sent since that turn arrived, the board sends the Continue
 prompt quoting it to the named agent, exactly as the user's Send would. Agents
 still cannot wake each other: they only say who should go next.
@@ -34,31 +34,32 @@ from .usage import highest
 
 
 def step(store, history: list[dict]) -> list[str]:
-    """Advance every running project by at most one hand-off; return what happened."""
+    """Advance every running pair by at most one hand-off; return what happened."""
     runs = store.running_autos()
     if not runs:
         return []
-    pins, user = store.project_agents(), store.user_name()
+    pins, user = store.pair_agents(), store.user_name()
     limits = {"Claude": store.limits("Claude"), "Codex": latest_limits(history, "Codex")}
     log = []
     for run in runs:
         outcome = advance(store, run, history, pins, user, limits)
         if outcome:
-            log.append(f"{run['project_id']}: {outcome}")
+            log.append(f"{run['project_id']}/{run['pair_name']}: {outcome}")
     return log
 
 
 def advance(store, run: dict, history: list[dict], pins: dict, user: str, limits: dict) -> str | None:
-    project = run["project_id"]
+    pair_id = run["pair_id"]
+    pair = store.pair(pair_id)
 
     def stop(reason: str) -> str:
-        store.stop_auto(project, reason, run=run["started_at"])
+        store.stop_auto(pair_id, reason, run=run["started_at"])
         return f"stopped: {reason}"
 
-    project_pins = pins.get(project, {})
+    project_pins = pins.get(pair_id, {})
     if set(project_pins) != {"Claude", "Codex"}:
         return stop("A main session is no longer chosen")
-    failed = store.failed_since(project, run["started_at"])
+    failed = store.failed_since(pair_id, run["started_at"])
     if failed:
         return stop(f"A prompt to {failed['target']} failed: {failed['detail'] or 'no detail'}")
     for agent, reading in limits.items():
@@ -66,8 +67,8 @@ def advance(store, run: dict, history: list[dict], pins: dict, user: str, limits
         if window and window["percent"] >= run["ceiling"]:
             label = window["label"].removesuffix(" limit")
             return stop(f"{agent}'s {label} limit is at {window['percent']:g}% (ceiling {run['ceiling']}%)")
-    latest = latest_main_turn(history, project, pins, user)
-    if latest is None or store.prompted(project, turn_key(latest)):
+    latest = latest_main_turn(history, pair, pins, user)
+    if latest is None or store.prompted(pair_id, turn_key(latest)):
         return None  # nothing yet, or this turn's prompt is out: wait for the answer
     declared = (latest["next"] or {}).get("agent")
     if declared is None:
@@ -82,7 +83,7 @@ def advance(store, run: dict, history: list[dict], pins: dict, user: str, limits
     primed = bool(store.primed_sessions([project_pins[declared]]))
     prompt = continue_prompts(latest, run["name"], user)["short" if primed else "full"]
     try:
-        dispatch = store.create_dispatch(project, declared, prompt, after_turn=turn_key(latest), run=run["started_at"])
+        dispatch = store.create_dispatch(pair_id, declared, prompt, after_turn=turn_key(latest), run=run["started_at"], expected_pins=project_pins)
     except Conflict:
         return None  # the state changed since this round read it: look again next round
     deliver_here(store, dispatch)

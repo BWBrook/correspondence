@@ -1,7 +1,7 @@
 """Read the turn ledger that ``correspondence-turn-hook`` appends to.
 
 The board shows each agent's closing messages as recorded. A turn is ``main``
-when it comes from the project's pinned session for that agent, ``other`` when
+when it comes from a named pair's pinned session for that agent, ``other`` when
 the agent has a pinned session and this is a different one (an advisor or an
 automation), and unpinned otherwise. Automation heartbeats are flagged.
 
@@ -57,37 +57,43 @@ def declared_next(message: str | None, user_name: str = "User") -> dict | None:
     return {"agent": agent, "reason": match.group(2).strip() or None} if agent else None
 
 
-def annotate(turn: dict, pins: dict, user_name: str = "User") -> dict:
-    pinned = pins.get(turn["project"], {}).get(turn["agent"])
-    role = None if pinned is None else "main" if pinned == turn["session_id"] else "other"
+def annotate(turn: dict, pairs: list[dict], pins: dict, user_name: str = "User") -> dict:
+    project_pairs = [p for p in pairs if p["project_id"] == turn["project"]]
+    pair = next((p for p in project_pairs
+                 if turn["session_id"] and pins.get(p["id"], {}).get(turn["agent"]) == turn["session_id"]), None)
+    has_pin = any(turn["agent"] in pins.get(p["id"], {}) for p in project_pairs)
+    role = "main" if pair else "other" if has_pin else None
     automation = (turn["message"] or "").lstrip().startswith("<heartbeat>")
-    return {**turn, "role": role, "automation": automation, "next": declared_next(turn["message"], user_name)}
+    return {**turn, "role": role, "automation": automation, "next": declared_next(turn["message"], user_name),
+            "pair_id": pair["id"] if pair else None, "pair_name": pair["name"] if pair else None,
+            "discussion_ids": pair["discussion_ids"] if pair else []}
 
 
 def turn_key(turn: dict | None) -> str | None:
-    """A turn's identity on the board, recorded with each prompt sent after it."""
     return f"{turn['session_id']}@{turn['recorded_at']}" if turn else None
 
 
-def latest_main_turn(turns: list[dict], project_id: str, pins: dict, user_name: str = "User") -> dict | None:
-    """The project's newest turn from one of its main sessions, skipping advisors and automation heartbeats."""
-    return next((t for t in (annotate(t, pins, user_name) for t in turns if t["project"] == project_id)
-                 if t["role"] == "main" and not t["automation"]), None)
+def latest_main_turn(turns: list[dict], pair: dict, pins: dict, user_name: str = "User") -> dict | None:
+    return next((t for t in (annotate(t, [pair], pins, user_name) for t in turns if t["project"] == pair["project_id"])
+                 if t["pair_id"] == pair["id"] and not t["automation"]), None)
 
 
-def link_discussions(turns: list[dict], history: list[dict], posts) -> list[dict]:
-    """Add the discussions each turn's agent posted to since its session's previous turn.
-
-    ``history`` is the whole ledger, newest first; ``posts(project, agent,
-    after, through)`` returns that agent's posts in the window, compared to
-    the second. A session's first recorded turn has no window.
-    """
+def link_discussions(turns: list[dict], history: list[dict], posts, pairs: list[dict]) -> list[dict]:
+    counts = {}
+    for pair in pairs:
+        counts[pair["project_id"]] = counts.get(pair["project_id"], 0) + 1
     for turn in turns:
         previous = next((t for t in history if t["session_id"] == turn["session_id"] and t["project"] == turn["project"]
                          and t["recorded_at"][:19] < turn["recorded_at"][:19]), None)
-        found = posts(turn["project"], turn["agent"], previous["recorded_at"][:19], turn["recorded_at"][:19]) if previous else []
+        allowed = turn["discussion_ids"]
+        # Agent/time windows cannot identify which simultaneous chat posted.
+        # Multi-pair sections require explicit discussion links instead of guessing.
+        scoped = bool(allowed) or counts.get(turn["project"], 0) <= 1
+        found = posts(turn["project"], turn["agent"], previous["recorded_at"][:19], turn["recorded_at"][:19]) if previous and scoped else []
         threads = {}
         for post in found:
+            if allowed and post["thread_id"] not in allowed:
+                continue
             entry = threads.setdefault(post["thread_id"], {"thread_id": post["thread_id"], "title": post["title"], "message_ids": []})
             entry["message_ids"].append(post["id"])
         turn["discussions"] = list(threads.values())
@@ -98,36 +104,39 @@ def is_current(turn: dict) -> bool:
     return turn["role"] != "other" and not turn["automation"]
 
 
-def project_turns(turns: list[dict], project_id: str, limit: int, pins: dict, user_name: str = "User") -> list[dict]:
-    return [annotate(t, pins, user_name) for t in turns if t["project"] == project_id][:limit]
+def project_turns(turns: list[dict], project_id: str, limit: int, pairs: list[dict], pins: dict,
+                  user_name: str = "User", pair_id: int | None = None) -> list[dict]:
+    annotated = (annotate(t, pairs, pins, user_name) for t in turns if t["project"] == project_id)
+    return [t for t in annotated if pair_id is None or t["pair_id"] == pair_id][:limit]
 
 
-def latest_per_project(turns: list[dict], pins: dict, user_name: str = "User") -> list[dict]:
+def latest_per_pair(turns: list[dict], pairs: list[dict], pins: dict, user_name: str = "User") -> list[dict]:
     latest = {}
-    for turn in (annotate(t, pins, user_name) for t in turns):
+    for turn in (annotate(t, pairs, pins, user_name) for t in turns):
         if is_current(turn):
-            latest.setdefault(turn["project"], turn)
+            latest.setdefault((turn["project"], turn["pair_id"]), turn)
     return list(latest.values())
 
 
-def project_sessions(directory: Path, project_id: str) -> list[dict]:
-    """Every session seen in a project's turns, newest first, for choosing pins."""
+def project_sessions(directory: Path, project_id: str, pairs: list[dict], pins: dict) -> list[dict]:
     sessions = {}
-    for turn in read_turns(directory):
-        if turn["project"] != project_id or not turn["session_id"]:
+    for raw in read_turns(directory):
+        if raw["project"] != project_id or not raw["session_id"]:
             continue
+        turn = annotate(raw, pairs, pins)
         key = (turn["agent"], turn["session_id"])
         if key not in sessions:
             sessions[key] = {"agent": turn["agent"], "session_id": turn["session_id"], "last_at": turn["recorded_at"],
-                             "turns": 0, "automation": (turn["message"] or "").lstrip().startswith("<heartbeat>"),
-                             "excerpt": (turn["message"] or "")[:160], "machine": turn.get("machine")}
+                             "turns": 0, "automation": turn["automation"], "pair_id": turn["pair_id"],
+                             "pair_name": turn["pair_name"], "excerpt": (turn["message"] or "")[:160], "machine": turn.get("machine")}
         sessions[key]["turns"] += 1
     return list(sessions.values())
 
 
 def answered_at(turns: list[dict], dispatch: dict) -> str | None:
-    """Time of the first turn from the dispatched session after the request."""
     replies = [t["recorded_at"] for t in turns if t["session_id"] == dispatch["session_id"]
+               and t["project"] == dispatch["project_id"] and t["agent"] == dispatch["target"]
+               and t.get("machine") == dispatch.get("machine")
                and t["recorded_at"][:19] > dispatch["requested_at"][:19]]
     return min(replies) if replies else None
 
@@ -143,11 +152,15 @@ def continue_prompts(turn: dict, project_name: str, user_name: str) -> dict:
     """The Continue prompt quoting a turn: ``full`` for a session's first board prompt, then ``short``."""
     quoted = "\n".join(f"> {line}" for line in (turn.get("message") or "(no closing message recorded)").split("\n"))
     at = stamp(turn["recorded_at"])
+    context = f"Pair: {turn['pair_name']}.\n" if turn.get("pair_name") else ""
+    if turn.get("discussion_ids"):
+        context += "Board discussions: " + ", ".join(f"#{id}" for id in turn["discussion_ids"]) + ".\n"
+    context = context + "\n" if context else ""
     return {
-        "short": f"{turn['agent']} replied on {at}, closing with:\n\n{quoted}",
+        "short": f"{turn['agent']} replied on {at}, closing with:\n\n{context}{quoted}",
         "full": (f"Continue — from {user_name}, sent through the board.\n\n"
                  f"{turn['agent']}'s latest turn in {project_name} ended at {at}. "
-                 f"Its closing message, relayed word for word:\n\n{quoted}\n\nTake your next turn."),
+                 f"Its closing message, relayed word for word:\n\n{context}{quoted}\n\nTake your next turn."),
     }
 
 

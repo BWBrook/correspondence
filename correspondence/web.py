@@ -11,12 +11,12 @@ from pathlib import Path
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_here, messenger_listening, remote_claude_session
-from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_project,
+from .turns import (answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_pair,
                     link_discussions, project_sessions, project_turns, read_turns, turn_key)
 from . import autocontinue
 
@@ -72,8 +72,19 @@ class AgentPin(Payload):
     session_id: str | None
 
 
+class PairCreate(Payload):
+    name: str
+    discussion_ids: list[int] = Field(default_factory=list)
+
+
+class PairUpdate(Payload):
+    name: str | None = None
+    discussion_ids: list[int] | None = None
+
+
 class DispatchCreate(Payload):
-    project_id: str
+    pair_id: int
+    expected_pins: dict[str, str]
     target: str
     body: str
 
@@ -199,13 +210,18 @@ def create_app(data_dir=None, dist_dir=None):
         return PlainTextResponse(store().export_thread(USER, thread_id, archived=archived), media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="discussion-{thread_id}.md"'})
 
     @app.get("/api/turns")
-    def turns(project_id: str | None = None, limit: int = Query(10, ge=1, le=200)):
-        history, pins, user = read_turns(store().directory), store().project_agents(), store().user_name()
-        listed = project_turns(history, project_id, limit, pins, user) if project_id else latest_per_project(history, pins, user)
+    def turns(project_id: str | None = None, pair_id: int | None = Query(None, ge=1), limit: int = Query(10, ge=1, le=200)):
+        history, pairs, pins, user = read_turns(store().directory), store().pairs(), store().pair_agents(), store().user_name()
+        if pair_id is not None:
+            pair = store().pair(pair_id)
+            if project_id is not None and pair["project_id"] != project_id:
+                raise NotFound("This pair is not in the selected section")
+            project_id = pair["project_id"]
+        listed = project_turns(history, project_id, limit, pairs, pins, user, pair_id) if project_id else latest_per_pair(history, pairs, pins, user)
         names = {p["id"]: p["name"] for p in store().list_projects(USER)}
         for turn in listed:
             turn["continue_prompts"] = continue_prompts(turn, names.get(turn["project"], turn["project"]), user)
-        return link_discussions(listed, history, store().agent_posts)
+        return link_discussions(listed, history, store().agent_posts, pairs)
 
     @app.get("/api/usage")
     def usage(project_id: str | None = None, days: int = Query(7, ge=1, le=60)):
@@ -213,54 +229,68 @@ def create_app(data_dir=None, dist_dir=None):
         return {"limits": {"Claude": store().limits("Claude"), "Codex": latest_limits(history, "Codex")},
                 "days": daily_usage(history, project_id, days)}
 
-    @app.get("/api/projects/{project_id}/auto")
-    def auto_continue(project_id: str):
-        return store().auto_continue(project_id)
+    @app.get("/api/projects/{project_id}/pairs")
+    def pairs(project_id: str):
+        return store().pairs(project_id)
 
-    @app.post("/api/projects/{project_id}/auto")
-    def start_auto(project_id: str, payload: AutoStart):
-        store().start_auto(project_id, payload.hops, payload.ceiling)
-        run_autos()  # the first hand-off goes now if the latest turn already names an agent
-        return store().auto_continue(project_id)
+    @app.post("/api/projects/{project_id}/pairs", status_code=201)
+    def create_pair(project_id: str, payload: PairCreate):
+        return store().create_pair(project_id, payload.name, payload.discussion_ids)
 
-    @app.post("/api/projects/{project_id}/auto/stop")
-    def stop_auto(project_id: str, payload: Payload):
-        return store().stop_auto(project_id)
+    @app.post("/api/pairs/{pair_id}")
+    def update_pair(pair_id: int, payload: PairUpdate):
+        return store().update_pair(pair_id, payload.name, payload.discussion_ids)
 
-    @app.get("/api/projects/{project_id}/agents")
-    def project_agents(project_id: str):
+    @app.get("/api/pairs/{pair_id}/auto")
+    def auto_continue(pair_id: int):
+        return store().auto_continue(pair_id)
+
+    @app.post("/api/pairs/{pair_id}/auto")
+    def start_auto(pair_id: int, payload: AutoStart):
+        store().start_auto(pair_id, payload.hops, payload.ceiling)
+        run_autos()
+        return store().auto_continue(pair_id)
+
+    @app.post("/api/pairs/{pair_id}/auto/stop")
+    def stop_auto(pair_id: int, payload: Payload):
+        return store().stop_auto(pair_id)
+
+    @app.get("/api/pairs/{pair_id}/agents")
+    def pair_agents(pair_id: int):
+        pair = store().pair(pair_id)
         directory = store().directory
-        pins, machines = store().project_agents(project_id), store().pin_machines(project_id)
+        pins, machines = store().pair_agents(pair_id), store().pair_machines(pair_id)
         claude_machine = machines.get("Claude")
-        if "Claude" not in pins:
-            live = None
-        elif claude_machine is None:
-            live = claude_session(pins["Claude"])
-        else:
-            live = remote_claude_session(directory, claude_machine, pins["Claude"])
+        live = None if "Claude" not in pins else (claude_session(pins["Claude"]) if claude_machine is None
+                                                  else remote_claude_session(directory, claude_machine, pins["Claude"]))
         primed = store().primed_sessions(pins.values())
-        return {"pins": pins, "machines": machines, "sessions": project_sessions(directory, project_id),
+        return {"pins": pins, "machines": machines,
+                "sessions": project_sessions(directory, pair["project_id"], store().pairs(), store().pair_agents()),
                 "primed": {agent: session in primed for agent, session in pins.items()},
                 "claude_live": live, "messenger_listening": messenger_listening(directory, claude_machine),
                 "couriers": {m: courier_online(directory, m) for m in set(machines.values()) if m}}
 
-    @app.post("/api/projects/{project_id}/agents")
-    def set_project_agent(project_id: str, payload: AgentPin):
-        machine = next((s["machine"] for s in project_sessions(store().directory, project_id)
-                        if s["agent"] == payload.agent and s["session_id"] == payload.session_id), None)
-        store().set_project_agent(project_id, payload.agent, payload.session_id, machine)
-        return project_agents(project_id)
+    @app.post("/api/pairs/{pair_id}/agents")
+    def set_pair_agent(pair_id: int, payload: AgentPin):
+        pair = store().pair(pair_id)
+        sessions = project_sessions(store().directory, pair["project_id"], store().pairs(), store().pair_agents())
+        session = next((s for s in sessions if s["agent"] == payload.agent and s["session_id"] == payload.session_id), None)
+        if payload.session_id is not None and session is None:
+            raise NotFound("That session has no recorded turn in this section")
+        store().set_pair_agent(pair_id, payload.agent, payload.session_id, session["machine"] if session else None)
+        return pair_agents(pair_id)
 
     @app.get("/api/dispatches")
-    def dispatches(project_id: str, limit: int = Query(10, ge=1, le=100)):
+    def dispatches(pair_id: int = Query(..., ge=1), limit: int = Query(10, ge=1, le=100)):
         turns = read_turns(store().directory)
         return [{**d, "answered_at": answered_at(turns, d) if d["status"] == "delivered" else None}
-                for d in store().list_dispatches(project_id, limit)]
+                for d in store().list_dispatches(pair_id, limit)]
 
     @app.post("/api/dispatches", status_code=201)
     def create_dispatch(payload: DispatchCreate):
-        latest = latest_main_turn(read_turns(store().directory), payload.project_id, store().project_agents(), store().user_name())
-        dispatch = store().create_dispatch(payload.project_id, payload.target, payload.body, after_turn=turn_key(latest))
+        pair = store().pair(payload.pair_id)
+        latest = latest_main_turn(read_turns(store().directory), pair, store().pair_agents(), store().user_name())
+        dispatch = store().create_dispatch(payload.pair_id, payload.target, payload.body, after_turn=turn_key(latest), expected_pins=payload.expected_pins)
         return {**deliver_here(store(), dispatch), "answered_at": None}
 
     @app.post("/api/dispatches/{dispatch_id}/cancel")

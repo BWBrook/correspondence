@@ -19,7 +19,7 @@ LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 AUTO_HOPS = (1, 50)
 AUTO_CEILING = (10, 100)
 STALE_CLAIM_SECONDS = 120
@@ -177,6 +177,9 @@ class Store:
                 con.execute("PRAGMA user_version=9")
             if version < 10:
                 cls._upgrade_auto_continue(con)
+                con.execute("PRAGMA user_version=10")
+            if version < 11:
+                cls._upgrade_pairs(con)
                 con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             con.commit()
         except Exception:
@@ -206,6 +209,59 @@ class Store:
         con.execute("UPDATE dispatches SET origin='auto' WHERE origin='cruise'")
         if "after_turn" not in {row[1] for row in con.execute("PRAGMA table_info(dispatches)")}:
             con.execute("ALTER TABLE dispatches ADD COLUMN after_turn TEXT")
+
+    @staticmethod
+    def _upgrade_pairs(con):
+        con.execute("""CREATE TABLE pairs (
+            id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+            name TEXT NOT NULL COLLATE NOCASE, UNIQUE(project_id,name))""")
+        con.execute("INSERT INTO pairs(project_id,name) SELECT id,'Main' FROM projects")
+        con.execute("""CREATE TABLE pair_discussions (
+            pair_id INTEGER NOT NULL REFERENCES pairs(id), thread_id INTEGER NOT NULL REFERENCES threads(id),
+            PRIMARY KEY(pair_id,thread_id))""")
+        con.execute("""CREATE TABLE pair_agents (
+            pair_id INTEGER NOT NULL REFERENCES pairs(id),
+            agent TEXT NOT NULL CHECK(agent IN ('Claude','Codex')), session_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL, machine TEXT, PRIMARY KEY(pair_id,agent))""")
+        con.execute("""INSERT INTO pair_agents(pair_id,agent,session_id,updated_at,machine)
+            SELECT p.id,a.agent,a.session_id,a.updated_at,a.machine
+            FROM project_agents a JOIN pairs p ON p.project_id=a.project_id""")
+        if con.execute("SELECT COUNT(*) FROM pair_agents").fetchone()[0] != con.execute("SELECT COUNT(*) FROM project_agents").fetchone()[0]:
+            raise sqlite3.IntegrityError("Pair upgrade would lose an existing pin")
+        con.execute("DROP TABLE project_agents")
+        con.execute("""CREATE TABLE dispatches_new (
+            id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+            pair_id INTEGER NOT NULL REFERENCES pairs(id),
+            target TEXT NOT NULL CHECK(target IN ('Claude','Codex')), session_id TEXT NOT NULL,
+            body TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','delivered','failed')),
+            requested_at TEXT NOT NULL, delivered_at TEXT, detail TEXT, claimed_at TEXT,
+            machine TEXT, origin TEXT, after_turn TEXT)""")
+        con.execute("""INSERT INTO dispatches_new(id,project_id,pair_id,target,session_id,body,status,
+            requested_at,delivered_at,detail,claimed_at,machine,origin,after_turn)
+            SELECT d.id,d.project_id,p.id,d.target,d.session_id,d.body,d.status,d.requested_at,
+            d.delivered_at,d.detail,d.claimed_at,d.machine,d.origin,d.after_turn
+            FROM dispatches d JOIN pairs p ON p.project_id=d.project_id""")
+        if con.execute("SELECT COUNT(*) FROM dispatches_new").fetchone()[0] != con.execute("SELECT COUNT(*) FROM dispatches").fetchone()[0]:
+            raise sqlite3.IntegrityError("Pair upgrade would lose a dispatch")
+        con.execute("DROP TABLE dispatches")
+        con.execute("ALTER TABLE dispatches_new RENAME TO dispatches")
+        con.execute("CREATE INDEX dispatches_project ON dispatches(project_id,id)")
+        con.execute("CREATE INDEX dispatches_pair ON dispatches(pair_id,id)")
+        con.execute("""CREATE TABLE auto_continue_new (
+            pair_id INTEGER PRIMARY KEY REFERENCES pairs(id),
+            hops_left INTEGER NOT NULL CHECK(hops_left>=0),
+            ceiling INTEGER NOT NULL CHECK(ceiling BETWEEN 10 AND 100),
+            started_at TEXT NOT NULL, stopped_at TEXT, stopped_reason TEXT,
+            CHECK((stopped_at IS NULL)=(stopped_reason IS NULL)))""")
+        con.execute("""INSERT INTO auto_continue_new(pair_id,hops_left,ceiling,started_at,stopped_at,stopped_reason)
+            SELECT p.id,a.hops_left,a.ceiling,a.started_at,a.stopped_at,a.stopped_reason
+            FROM auto_continue a JOIN pairs p ON p.project_id=a.project_id""")
+        if con.execute("SELECT COUNT(*) FROM auto_continue_new").fetchone()[0] != con.execute("SELECT COUNT(*) FROM auto_continue").fetchone()[0]:
+            raise sqlite3.IntegrityError("Pair upgrade would lose an auto-continue run")
+        con.execute("DROP TABLE auto_continue")
+        con.execute("ALTER TABLE auto_continue_new RENAME TO auto_continue")
+        if con.execute("PRAGMA foreign_key_check").fetchall():
+            raise sqlite3.IntegrityError("Integrity failure during pair upgrade")
 
     @staticmethod
     def _upgrade_participants(con):
@@ -427,11 +483,10 @@ class Store:
         con.execute("PRAGMA defer_foreign_keys=ON")
         con.execute("UPDATE projects SET id=? WHERE id=?", (new_id, old_id))
         con.execute("UPDATE threads SET project_id=? WHERE project_id=?", (new_id, old_id))
-        con.execute("UPDATE project_agents SET project_id=? WHERE project_id=?", (new_id, old_id))
+        con.execute("UPDATE pairs SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("UPDATE dispatches SET project_id=? WHERE project_id=?", (new_id, old_id))
-        con.execute("UPDATE auto_continue SET project_id=? WHERE project_id=?", (new_id, old_id))
         con.execute("""UPDATE auto_continue SET stopped_at=?, stopped_reason='The project was archived or restored'
-            WHERE project_id=? AND stopped_at IS NULL""", (now(), new_id))
+            WHERE pair_id IN (SELECT id FROM pairs WHERE project_id=?) AND stopped_at IS NULL""", (now(), new_id))
 
     @staticmethod
     def _project_state(con, project_id, expected_state):
@@ -495,34 +550,96 @@ class Store:
             con.execute("UPDATE projects SET name=?,archived_at=NULL,archived_original_id=NULL,state_token=? WHERE id=?", (name, uuid4().hex, restored_id))
             return self._require(con, "projects", restored_id)
 
-    def project_agents(self, project_id=None):
-        """Main Claude session and Codex thread per project: {project: {agent: session}}."""
+    @staticmethod
+    def _pair(con, pair_id):
+        if type(pair_id) is not int or pair_id < 1:
+            raise ValueError("Pair id must be a positive integer")
+        pair = Store._require(con, "pairs", pair_id)
+        Store._project(con, pair["project_id"])
+        pair["discussion_ids"] = [r[0] for r in con.execute(
+            "SELECT thread_id FROM pair_discussions WHERE pair_id=? ORDER BY thread_id", (pair_id,))]
+        return pair
+
+    @staticmethod
+    def _pair_discussions(con, project_id, discussion_ids):
+        if not isinstance(discussion_ids, (list, tuple)) or any(type(i) is not int or i < 1 for i in discussion_ids):
+            raise ValueError("Discussion ids must be positive integers")
+        ids = sorted(set(discussion_ids))
+        for thread_id in ids:
+            thread = Store._require(con, "threads", thread_id)
+            if thread["project_id"] != project_id:
+                raise ValueError("Every discussion must belong to the pair's project")
+        return ids
+
+    def pairs(self, project_id=None):
         with self.connect() as con:
             if project_id is not None:
                 self._project(con, project_id)
-            rows = con.execute("SELECT project_id, agent, session_id FROM project_agents"
-                               + (" WHERE project_id=?" if project_id is not None else ""),
-                               (project_id,) if project_id is not None else ()).fetchall()
+            rows = con.execute("""SELECT a.* FROM pairs a JOIN projects p ON p.id=a.project_id
+                WHERE p.archived_at IS NULL""" + (" AND a.project_id=?" if project_id is not None else "")
+                + " ORDER BY a.id", (project_id,) if project_id is not None else ()).fetchall()
+            return [self._pair(con, row["id"]) for row in rows]
+
+    def pair(self, pair_id):
+        with self.connect() as con:
+            return self._pair(con, pair_id)
+
+    def create_pair(self, project_id, name, discussion_ids=()):
+        name = clean_text(name, "Pair name", 100)
+        with self.connect(write=True) as con:
+            self._project(con, project_id)
+            ids = self._pair_discussions(con, project_id, discussion_ids)
+            existing = con.execute("SELECT id FROM pairs WHERE project_id=? AND name=? COLLATE NOCASE", (project_id, name)).fetchone()
+            if existing:
+                pair = self._pair(con, existing["id"])
+                if pair["discussion_ids"] != ids:
+                    raise Conflict("Pair name already exists with different discussions")
+                return pair
+            pair_id = con.execute("INSERT INTO pairs(project_id,name) VALUES (?,?)", (project_id, name)).lastrowid
+            con.executemany("INSERT INTO pair_discussions(pair_id,thread_id) VALUES (?,?)", [(pair_id,i) for i in ids])
+            return self._pair(con, pair_id)
+
+    def update_pair(self, pair_id, name=None, discussion_ids=None):
+        if name is not None:
+            name = clean_text(name, "Pair name", 100)
+        with self.connect(write=True) as con:
+            pair = self._pair(con, pair_id)
+            if name is not None:
+                if con.execute("SELECT 1 FROM pairs WHERE project_id=? AND name=? COLLATE NOCASE AND id!=?",
+                               (pair["project_id"],name,pair_id)).fetchone():
+                    raise Conflict("Another pair already has that name")
+                con.execute("UPDATE pairs SET name=? WHERE id=?", (name,pair_id))
+            if discussion_ids is not None:
+                ids = self._pair_discussions(con, pair["project_id"], discussion_ids)
+                con.execute("DELETE FROM pair_discussions WHERE pair_id=?", (pair_id,))
+                con.executemany("INSERT INTO pair_discussions(pair_id,thread_id) VALUES (?,?)", [(pair_id,i) for i in ids])
+            return self._pair(con, pair_id)
+
+    def pair_agents(self, pair_id=None):
+        with self.connect() as con:
+            if pair_id is not None:
+                self._pair(con, pair_id)
+            rows = con.execute("""SELECT a.pair_id,a.agent,a.session_id FROM pair_agents a
+                JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
+                WHERE p.archived_at IS NULL""" + (" AND a.pair_id=?" if pair_id is not None else ""),
+                (pair_id,) if pair_id is not None else ()).fetchall()
         pins = {}
         for row in rows:
-            pins.setdefault(row["project_id"], {})[row["agent"]] = row["session_id"]
-        return pins.get(project_id, {}) if project_id is not None else pins
+            pins.setdefault(row["pair_id"], {})[row["agent"]] = row["session_id"]
+        return pins.get(pair_id, {}) if pair_id is not None else pins
 
-    def pin_machines(self, project_id):
-        """Machine each main session runs on, {agent: machine}; None is the board's own host."""
+    def pair_machines(self, pair_id):
         with self.connect() as con:
-            self._project(con, project_id)
-            return {row["agent"]: row["machine"] for row in con.execute(
-                "SELECT agent, machine FROM project_agents WHERE project_id=?", (project_id,))}
+            self._pair(con, pair_id)
+            return {r["agent"]:r["machine"] for r in con.execute("SELECT agent,machine FROM pair_agents WHERE pair_id=?", (pair_id,))}
 
     def machine_pins(self, machine):
-        """Every main session pinned on one machine, for that machine's courier."""
         with self.connect() as con:
-            return [dict(row) for row in con.execute(
-                """SELECT a.project_id, a.agent, a.session_id FROM project_agents a JOIN projects p ON p.id=a.project_id
-                WHERE a.machine=? AND p.archived_at IS NULL ORDER BY a.project_id, a.agent""", (machine,))]
+            return [dict(row) for row in con.execute("""SELECT a.pair_id,b.project_id,a.agent,a.session_id
+                FROM pair_agents a JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
+                WHERE a.machine=? AND p.archived_at IS NULL ORDER BY b.project_id,a.pair_id,a.agent""", (machine,))]
 
-    def set_project_agent(self, project_id, agent, session_id, machine=None):
+    def set_pair_agent(self, pair_id, agent, session_id, machine=None):
         if agent not in DISPATCH_TARGETS:
             raise ValueError("Agent must be Claude or Codex")
         if session_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{7,99}", session_id):
@@ -530,54 +647,70 @@ class Store:
         if machine is not None and not MACHINE_RE.fullmatch(machine):
             raise ValueError("Machine must be a short lowercase name")
         with self.connect(write=True) as con:
-            self._project(con, project_id)
-            con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: the main session changed'
-                WHERE project_id=? AND target=? AND status='queued' AND claimed_at IS NULL AND session_id IS NOT ?""",
-                        (project_id, agent, session_id))
+            pair = self._pair(con, pair_id)
+            if session_id is not None and con.execute("""SELECT 1 FROM pair_agents a JOIN pairs p ON p.id=a.pair_id
+                WHERE p.project_id=? AND a.agent=? AND a.session_id=? AND a.pair_id!=?""",
+                (pair["project_id"],agent,session_id,pair_id)).fetchone():
+                raise Conflict("That session already belongs to another pair in this project")
+            previous = con.execute("SELECT session_id,machine FROM pair_agents WHERE pair_id=? AND agent=?", (pair_id,agent)).fetchone()
+            changed = (previous is not None or session_id is not None) and (previous is None or
+                (previous["session_id"],previous["machine"]) != (session_id,machine))
+            if changed:
+                con.execute("""UPDATE auto_continue SET stopped_at=?,stopped_reason='A main session changed'
+                    WHERE pair_id=? AND stopped_at IS NULL""", (now(),pair_id))
+                con.execute("""UPDATE dispatches SET status='failed',detail='Cancelled: the pair’s main sessions changed'
+                    WHERE pair_id=? AND origin='auto' AND status='queued' AND claimed_at IS NULL""", (pair_id,))
+            con.execute("""UPDATE dispatches SET status='failed',detail='Cancelled: the main session changed'
+                WHERE pair_id=? AND target=? AND status='queued' AND claimed_at IS NULL AND (session_id IS NOT ? OR machine IS NOT ?)""", (pair_id,agent,session_id,machine))
             if session_id is None:
-                con.execute("DELETE FROM project_agents WHERE project_id=? AND agent=?", (project_id, agent))
+                con.execute("DELETE FROM pair_agents WHERE pair_id=? AND agent=?", (pair_id,agent))
             else:
-                con.execute("""INSERT INTO project_agents(project_id,agent,session_id,updated_at,machine) VALUES (?,?,?,?,?)
-                    ON CONFLICT(project_id,agent) DO UPDATE SET session_id=excluded.session_id,
-                    updated_at=excluded.updated_at, machine=excluded.machine""",
-                            (project_id, agent, session_id, now(), machine))
-        return self.project_agents(project_id)
+                con.execute("""INSERT INTO pair_agents(pair_id,agent,session_id,updated_at,machine) VALUES (?,?,?,?,?)
+                    ON CONFLICT(pair_id,agent) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at,machine=excluded.machine""",
+                    (pair_id,agent,session_id,now(),machine))
+        return self.pair_agents(pair_id)
 
-    def create_dispatch(self, project_id, target, body, after_turn=None, run=None):
-        """Record a prompt for a project's main agent; refuse one while another to it is in flight.
+    def create_dispatch(self, pair_id, target, body, after_turn=None, run=None, *, expected_pins=None):
+        """Record a prompt for a pair's main agent; refuse one while another to it is in flight.
 
-        ``after_turn`` names the project's latest main turn when the prompt was
+        ``after_turn`` names the pair's latest main turn when the prompt was
         sent (``turns.turn_key``), so auto-continue can tell that the turn has
         had its prompt without comparing clocks across machines. ``run`` is the
         ``started_at`` of the auto-continue run sending the prompt: it goes only
         while that run is going and has hand-offs left, and spends one, and only
-        when no other prompt in the project is still on its way, so a run never
-        has two agents working at once.
+        when no other prompt in the pair is still on its way, so a run never
+        has two agents working at once. ``expected_pins`` guards the snapshot
+        used to choose the source turn and target against a concurrent repin.
         """
         if target not in DISPATCH_TARGETS:
             raise ValueError("Target must be Claude or Codex")
         body = clean_text(body, "Prompt", 50_000)
         with self.connect(write=True) as con:
-            self._project(con, project_id)
-            pin = con.execute("SELECT session_id, machine FROM project_agents WHERE project_id=? AND agent=?", (project_id, target)).fetchone()
+            pair = self._pair(con, pair_id)
+            if expected_pins is not None:
+                current_pins = {r["agent"]:r["session_id"] for r in con.execute(
+                    "SELECT agent,session_id FROM pair_agents WHERE pair_id=?", (pair_id,))}
+                if current_pins != expected_pins:
+                    raise Conflict("The pair's main sessions changed; refresh before sending")
+            pin = con.execute("SELECT session_id, machine FROM pair_agents WHERE pair_id=? AND agent=?", (pair_id, target)).fetchone()
             if pin is None:
-                raise Conflict(f"Set this project's main {target} session first")
+                raise Conflict(f"Set this pair's main {target} session first")
             cutoff = datetime.fromtimestamp(time.time() - DISPATCH_GAP_SECONDS, timezone.utc).isoformat(timespec="microseconds")
-            if con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND target=?
-                    AND (status='queued' OR (status='delivered' AND delivered_at>?))""", (project_id, target, cutoff)).fetchone():
+            if con.execute("""SELECT 1 FROM dispatches WHERE pair_id=? AND target=?
+                    AND (status='queued' OR (status='delivered' AND delivered_at>?))""", (pair_id, target, cutoff)).fetchone():
                 raise Conflict(f"A prompt to {target} is still on its way or was just delivered; wait or cancel it first")
             if run is not None:
-                if {r[0] for r in con.execute("SELECT agent FROM project_agents WHERE project_id=?", (project_id,))} != DISPATCH_TARGETS:
+                if {r[0] for r in con.execute("SELECT agent FROM pair_agents WHERE pair_id=?", (pair_id,))} != DISPATCH_TARGETS:
                     raise Conflict("A main session is no longer chosen")
-                if con.execute("SELECT 1 FROM dispatches WHERE project_id=? AND status='queued'", (project_id,)).fetchone():
-                    raise Conflict("Another prompt in this project is still on its way")
-                if self._prompted(con, project_id, after_turn):
+                if con.execute("SELECT 1 FROM dispatches WHERE pair_id=? AND status='queued'", (pair_id,)).fetchone():
+                    raise Conflict("Another prompt in this pair is still on its way")
+                if self._prompted(con, pair_id, after_turn):
                     raise Conflict("That turn has already had its prompt")
             if run is not None and not con.execute("""UPDATE auto_continue SET hops_left=hops_left-1
-                    WHERE project_id=? AND started_at=? AND stopped_at IS NULL AND hops_left>0""", (project_id, run)).rowcount:
+                    WHERE pair_id=? AND started_at=? AND stopped_at IS NULL AND hops_left>0""", (pair_id, run)).rowcount:
                 raise Conflict("That auto-continue run has stopped or has no hand-offs left")
-            cursor = con.execute("""INSERT INTO dispatches(project_id,target,session_id,body,status,requested_at,machine,origin,after_turn)
-                VALUES (?,?,?,?,'queued',?,?,?,?)""", (project_id, target, pin["session_id"], body, now(), pin["machine"],
+            cursor = con.execute("""INSERT INTO dispatches(project_id,pair_id,target,session_id,body,status,requested_at,machine,origin,after_turn)
+                VALUES (?,?,?,?,?,'queued',?,?,?,?)""", (pair["project_id"], pair_id, target, pin["session_id"], body, now(), pin["machine"],
                                                       None if run is None else "auto", after_turn))
             return self._require(con, "dispatches", cursor.lastrowid)
 
@@ -601,8 +734,8 @@ class Store:
         """
         with self.connect() as con:
             return [dict(r) for r in con.execute(
-                """SELECT d.*, EXISTS(SELECT 1 FROM dispatches p WHERE p.session_id=d.session_id
-                AND p.status='delivered') AS primed FROM dispatches d
+                """SELECT d.*,b.name AS pair_name,EXISTS(SELECT 1 FROM dispatches p WHERE p.session_id=d.session_id
+                AND p.status='delivered') AS primed FROM dispatches d JOIN pairs b ON b.id=d.pair_id
                 WHERE d.target=? AND d.machine IS ? AND d.status='queued' AND d.claimed_at IS NULL
                 ORDER BY d.id""", (target, machine))]
 
@@ -658,81 +791,82 @@ class Store:
         return time.time() - datetime.fromisoformat(stamp).timestamp()
 
     @staticmethod
-    def _auto(con, project_id):
-        row = con.execute("SELECT * FROM auto_continue WHERE project_id=?", (project_id,)).fetchone()
+    def _auto(con, pair_id):
+        row = con.execute("SELECT * FROM auto_continue WHERE pair_id=?", (pair_id,)).fetchone()
         if row is None:
-            return {"project_id": project_id, "running": False, "hops_left": None, "ceiling": None,
+            return {"pair_id": pair_id, "running": False, "hops_left": None, "ceiling": None,
                     "started_at": None, "stopped_at": None, "stopped_reason": None}
         return {**dict(row), "running": row["stopped_at"] is None}
 
-    def auto_continue(self, project_id):
-        """The project's latest auto-continue run: running, or why it stopped."""
+    def auto_continue(self, pair_id):
+        """The pair's latest auto-continue run: running, or why it stopped."""
         with self.connect() as con:
-            self._project(con, project_id)
-            return self._auto(con, project_id)
+            self._pair(con, pair_id)
+            return self._auto(con, pair_id)
 
-    def start_auto(self, project_id, hops, ceiling):
+    def start_auto(self, pair_id, hops, ceiling):
         """Start auto-continue for ``hops`` hand-offs, stopping at ``ceiling`` percent of any plan limit."""
-        if not (isinstance(hops, int) and AUTO_HOPS[0] <= hops <= AUTO_HOPS[1]):
+        if not (type(hops) is int and AUTO_HOPS[0] <= hops <= AUTO_HOPS[1]):
             raise ValueError(f"Hand-offs must be {AUTO_HOPS[0]}–{AUTO_HOPS[1]}")
-        if not (isinstance(ceiling, int) and AUTO_CEILING[0] <= ceiling <= AUTO_CEILING[1]):
+        if not (type(ceiling) is int and AUTO_CEILING[0] <= ceiling <= AUTO_CEILING[1]):
             raise ValueError(f"The limit ceiling must be {AUTO_CEILING[0]}–{AUTO_CEILING[1]}%")
         with self.connect(write=True) as con:
-            self._project(con, project_id)
-            pins = {row[0] for row in con.execute("SELECT agent FROM project_agents WHERE project_id=?", (project_id,))}
+            self._pair(con, pair_id)
+            pins = {row[0] for row in con.execute("SELECT agent FROM pair_agents WHERE pair_id=?", (pair_id,))}
             if pins != DISPATCH_TARGETS:
                 raise Conflict("Choose both main sessions before starting auto-continue")
-            if self._auto(con, project_id)["running"]:
+            if self._auto(con, pair_id)["running"]:
                 raise Conflict("Auto-continue is already running; stop it first")
-            con.execute("""INSERT INTO auto_continue(project_id,hops_left,ceiling,started_at,stopped_at,stopped_reason)
-                VALUES (?,?,?,?,NULL,NULL) ON CONFLICT(project_id) DO UPDATE SET hops_left=excluded.hops_left,
+            con.execute("""INSERT INTO auto_continue(pair_id,hops_left,ceiling,started_at,stopped_at,stopped_reason)
+                VALUES (?,?,?,?,NULL,NULL) ON CONFLICT(pair_id) DO UPDATE SET hops_left=excluded.hops_left,
                 ceiling=excluded.ceiling, started_at=excluded.started_at, stopped_at=NULL, stopped_reason=NULL""",
-                        (project_id, hops, ceiling, now()))
-            return self._auto(con, project_id)
+                        (pair_id, hops, ceiling, now()))
+            return self._auto(con, pair_id)
 
-    def stop_auto(self, project_id, reason=None, run=None):
+    def stop_auto(self, pair_id, reason=None, run=None):
         """Stop the running auto-continue and withdraw its prompts not yet picked up.
 
         ``run`` (a run's ``started_at``) stops only that run, so a decision
         made on a stale reading never ends a run the user has since restarted.
         """
         with self.connect(write=True) as con:
-            self._project(con, project_id)
-            current = self._auto(con, project_id)
+            self._pair(con, pair_id)
+            current = self._auto(con, pair_id)
             if current["running"] and run in (None, current["started_at"]):
                 reason = reason or f"Stopped by {self._user_name(con)}"
-                con.execute("UPDATE auto_continue SET stopped_at=?, stopped_reason=? WHERE project_id=?", (now(), reason, project_id))
+                con.execute("UPDATE auto_continue SET stopped_at=?, stopped_reason=? WHERE pair_id=?", (now(), reason, pair_id))
                 con.execute("""UPDATE dispatches SET status='failed', detail='Cancelled: auto-continue stopped'
-                    WHERE project_id=? AND origin='auto' AND status='queued' AND claimed_at IS NULL AND requested_at>=?""",
-                            (project_id, current["started_at"]))
-            return self._auto(con, project_id)
+                    WHERE pair_id=? AND origin='auto' AND status='queued' AND claimed_at IS NULL AND requested_at>=?""",
+                            (pair_id, current["started_at"]))
+            return self._auto(con, pair_id)
 
     def running_autos(self):
         with self.connect() as con:
             return [{**dict(row), "running": True} for row in con.execute(
-                """SELECT a.*, p.name FROM auto_continue a JOIN projects p ON p.id=a.project_id
+                """SELECT a.*,b.project_id,b.name AS pair_name,p.name FROM auto_continue a
+                JOIN pairs b ON b.id=a.pair_id JOIN projects p ON p.id=b.project_id
                 WHERE a.stopped_at IS NULL AND p.archived_at IS NULL""")]
 
-    def failed_since(self, project_id, since):
-        """The newest prompt in the project that failed or was cancelled after ``since``, if any."""
+    def failed_since(self, pair_id, since):
+        """The newest prompt in the pair that failed or was cancelled after ``since``, if any."""
         with self.connect() as con:
-            row = con.execute("""SELECT * FROM dispatches WHERE project_id=? AND status='failed' AND requested_at>=?
-                ORDER BY id DESC LIMIT 1""", (project_id, since)).fetchone()
+            row = con.execute("""SELECT * FROM dispatches WHERE pair_id=? AND status='failed' AND requested_at>=?
+                ORDER BY id DESC LIMIT 1""", (pair_id, since)).fetchone()
             return dict(row) if row else None
 
     @staticmethod
-    def _prompted(con, project_id, turn_key):
-        return con.execute("""SELECT 1 FROM dispatches WHERE project_id=? AND after_turn=? AND status IN ('queued','delivered')""",
-                           (project_id, turn_key)).fetchone() is not None
+    def _prompted(con, pair_id, turn_key):
+        return con.execute("""SELECT 1 FROM dispatches WHERE pair_id=? AND after_turn=? AND status IN ('queued','delivered')""",
+                           (pair_id, turn_key)).fetchone() is not None
 
-    def prompted(self, project_id, turn_key):
-        """Whether a prompt sent since this turn was the project's latest is on its way or delivered.
+    def prompted(self, pair_id, turn_key):
+        """Whether a prompt sent since this turn was the pair's latest is on its way or delivered.
 
         A failed or cancelled one does not count: a run stops on a failure
         during it (``failed_since``), and a run started afterwards tries again.
         """
         with self.connect() as con:
-            return self._prompted(con, project_id, turn_key)
+            return self._prompted(con, pair_id, turn_key)
 
     def set_limits(self, agent, reading):
         """Keep an agent's latest plan-limit reading."""
@@ -750,11 +884,11 @@ class Store:
             row = con.execute("SELECT value FROM settings WHERE key=?", (f"limits.{agent}",)).fetchone()
             return json.loads(row[0]) if row else None
 
-    def list_dispatches(self, project_id, limit=10):
+    def list_dispatches(self, pair_id, limit=10):
         with self.connect() as con:
-            self._project(con, project_id)
+            self._pair(con, pair_id)
             return [dict(row) for row in con.execute(
-                "SELECT * FROM dispatches WHERE project_id=? ORDER BY id DESC LIMIT ?", (project_id, limit))]
+                "SELECT * FROM dispatches WHERE pair_id=? ORDER BY id DESC LIMIT ?", (pair_id, limit))]
 
     def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None):
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", id) or len(id) > 100:
@@ -772,6 +906,7 @@ class Store:
                     raise Conflict("Project slug already exists with different details")
                 return dict(existing)
             con.execute("INSERT INTO projects(id,name,description,repo_path,created_at,state_token) VALUES (?,?,?,?,?,?)", (id, name, description, repo_path, now(), uuid4().hex))
+            con.execute("INSERT INTO pairs(project_id,name) VALUES (?,'Main')", (id,))
             return self._require(con, "projects", id)
 
     def list_projects(self, author, *, archived=False):

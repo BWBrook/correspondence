@@ -1,14 +1,23 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api, post, shortTime } from "./api";
 
 const AGENTS = ["Claude", "Codex"];
 
 export function continuePrompt(turn, primed) {
-  if (!turn) return "Continue: take your next turn on this project.";
+  if (!turn) return "Continue: take your next turn for this pair.";
   return primed ? turn.continue_prompts.short : turn.continue_prompts.full;
 }
 
 const STALE_CLAIM_MS = 120000;
+
+function useMounted() {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  return mounted;
+}
 
 function dispatchState(d, live) {
   const carrier = d.target === "Codex" ? "courier" : "messenger";
@@ -38,7 +47,8 @@ function autoStatus(auto) {
   return "Prompts go when you press Send.";
 }
 
-function AutoControl({ projectId, auto, onChange }) {
+function AutoControl({ pairId, auto, onChange }) {
+  const mounted = useMounted();
   const [hops, setHops] = useState(6);
   const [ceiling, setCeiling] = useState(80);
   const [error, setError] = useState("");
@@ -47,11 +57,12 @@ function AutoControl({ projectId, auto, onChange }) {
     setError("");
     setBusy(true);
     try {
-      onChange(await post(`/projects/${encodeURIComponent(projectId)}/${path}`, body));
+      const next = await post(`/pairs/${pairId}/${path}`, body);
+      if (mounted.current) onChange(next);
     } catch (e) {
-      setError(e.message);
+      if (mounted.current) setError(e.message);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -102,28 +113,29 @@ function newerSession(agents, agent) {
       s.agent === agent &&
       !s.automation &&
       s.session_id !== agents.pins[agent] &&
+      (s.pair_id == null || s.pair_id === agents.pair_id) &&
       (!pinned || s.last_at > pinned.last_at),
   );
 }
 
-function MainSessions({ projectId, agents, onChange }) {
+function MainSessions({ pairId, agents, onChange }) {
+  const mounted = useMounted();
   const [error, setError] = useState("");
   async function pin(agent, session_id) {
     setError("");
     try {
-      onChange(
-        await post(`/projects/${encodeURIComponent(projectId)}/agents`, {
-          agent,
-          session_id: session_id || null,
-        }),
-      );
+      const next = await post(`/pairs/${pairId}/agents`, {
+        agent,
+        session_id: session_id || null,
+      });
+      if (mounted.current) onChange(next);
     } catch (e) {
-      setError(e.message);
+      if (mounted.current) setError(e.message);
     }
   }
   return (
     <details className="main-sessions">
-      <summary>Main sessions</summary>
+      <summary>Pair sessions</summary>
       <p className="hint">
         Prompts go only to these sessions. Turns from other sessions, such as
         advisors or automations, are greyed and never woken.
@@ -139,12 +151,14 @@ function MainSessions({ projectId, agents, onChange }) {
             {agents.sessions
               .filter((s) => s.agent === agent)
               .map((s) => (
-                <option key={s.session_id} value={s.session_id}>
+                <option key={s.session_id} value={s.session_id}
+                  disabled={s.pair_id != null && s.pair_id !== pairId}>
                   {s.session_id.slice(0, 8)} · {s.turns}{" "}
                   {s.turns === 1 ? "turn" : "turns"} · last{" "}
                   {shortTime(s.last_at)}
                   {s.automation ? " · automation" : ""}
-                  {s.machine ? ` · ${s.machine}` : ""} ·{" "}
+                  {s.machine ? ` · ${s.machine}` : ""}
+                  {s.pair_id != null && s.pair_id !== pairId ? ` · used by ${s.pair_name}` : ""} ·{" "}
                   {s.excerpt.replace(/\s+/g, " ").slice(0, 50)}
                 </option>
               ))}
@@ -160,7 +174,8 @@ function MainSessions({ projectId, agents, onChange }) {
   );
 }
 
-export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
+export function NextTurn({ pairId, pairName, lastTurn, onPinsChanged }) {
+  const mounted = useMounted();
   const [agents, setAgents] = useState({
     pins: {},
     machines: {},
@@ -189,13 +204,13 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
   useEffect(() => {
     let live = true;
     const load = () => {
-      api(`/projects/${encodeURIComponent(projectId)}/agents`)
-        .then((a) => live && setAgents(a))
+      api(`/pairs/${pairId}/agents`)
+        .then((a) => live && setAgents({ ...a, pair_id: pairId }))
         .catch(() => {});
-      api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
+      api(`/dispatches?pair_id=${pairId}&limit=5`)
         .then((d) => live && setDispatches(d))
         .catch(() => {});
-      api(`/projects/${encodeURIComponent(projectId)}/auto`)
+      api(`/pairs/${pairId}/auto`)
         .then((a) => live && setAuto(a))
         .catch(() => {});
     };
@@ -207,40 +222,41 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
       live = false;
       clearInterval(poll);
     };
-  }, [projectId]);
+  }, [pairId]);
   const pending = dispatches.some((d) => d.status === "queued");
   const running = auto.running;
   useEffect(() => {
     if (!pending && !running) return undefined;
+    let live = true;
     const poll = setInterval(() => {
-      api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
-        .then(setDispatches)
+      api(`/dispatches?pair_id=${pairId}&limit=5`)
+        .then((next) => live && setDispatches(next))
         .catch(() => {});
       if (running)
-        api(`/projects/${encodeURIComponent(projectId)}/auto`)
-          .then(setAuto)
+        api(`/pairs/${pairId}/auto`)
+          .then((next) => live && setAuto(next))
           .catch(() => {});
     }, 3000);
-    return () => clearInterval(poll);
-  }, [pending, running, projectId]);
+    return () => { live = false; clearInterval(poll); };
+  }, [pending, running, pairId]);
   async function repin(agent, session_id) {
     setError("");
     try {
-      setAgents(
-        await post(`/projects/${encodeURIComponent(projectId)}/agents`, { agent, session_id }),
-      );
+      const next = await post(`/pairs/${pairId}/agents`, { agent, session_id });
+      if (!mounted.current) return;
+      setAgents({ ...next, pair_id: pairId });
       onPinsChanged();
     } catch (e) {
-      setError(e.message);
+      if (mounted.current) setError(e.message);
     }
   }
   async function cancel(id) {
     setError("");
     try {
       const result = await post(`/dispatches/${id}/cancel`, {});
-      setDispatches((list) => list.map((d) => (d.id === id ? result : d)));
+      if (mounted.current) setDispatches((list) => list.map((d) => (d.id === id ? result : d)));
     } catch (e) {
-      setError(e.message);
+      if (mounted.current) setError(e.message);
     }
   }
   async function send(target) {
@@ -248,29 +264,31 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
     setError("");
     try {
       const result = await post("/dispatches", {
-        project_id: projectId,
+        pair_id: pairId,
         target,
         body: text,
+        expected_pins: agents.pins,
       });
+      if (!mounted.current) return;
       setDispatches((list) => [result, ...list].slice(0, 5));
       if (result.status === "failed")
         setError(`Not delivered: ${result.detail}`);
       else setEdited(false);
     } catch (e) {
-      setError(e.message);
+      if (mounted.current) setError(e.message);
     } finally {
-      setSending(null);
+      if (mounted.current) setSending(null);
     }
   }
   function blocked(agent) {
     if (!agents.pins[agent])
-      return `Choose the main ${agent} session under Main sessions first.`;
+      return `Choose this pair’s ${agent} session under Pair sessions first.`;
     return null;
   }
   return (
     <section className="next-turn" aria-label="Next turn">
       <header>
-        <h3>Next turn</h3>
+        <h3>Next turn <span className="pair-name">· {pairName}</span></h3>
         <span className="hint">
           {lastTurn
             ? `Last: ${lastTurn.agent}, ${shortTime(lastTurn.recorded_at)}`
@@ -279,12 +297,12 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
         </span>
       </header>
       <AutoControl
-        projectId={projectId}
+        pairId={pairId}
         auto={auto}
         onChange={(next) => {
           setAuto(next);
-          api(`/dispatches?project_id=${encodeURIComponent(projectId)}&limit=5`)
-            .then(setDispatches)
+          api(`/dispatches?pair_id=${pairId}&limit=5`)
+            .then((next) => mounted.current && setDispatches(next))
             .catch(() => {});
         }}
       />
@@ -383,10 +401,10 @@ export function NextTurn({ projectId, lastTurn, onPinsChanged }) {
         </ul>
       )}
       <MainSessions
-        projectId={projectId}
+        pairId={pairId}
         agents={agents}
         onChange={(next) => {
-          setAgents(next);
+          setAgents({ ...next, pair_id: pairId });
           onPinsChanged();
         }}
       />

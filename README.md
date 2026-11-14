@@ -35,7 +35,7 @@ over the carrying without taking over the decisions.
 ## Principles
 
 - **You hold the throttle and the brake.** A prompt reaches an agent when you
-  press Send, or when you let a project auto-continue for a number of hand-offs
+  press Send, or when you let a named pair auto-continue for a number of hand-offs
   you choose, and Stop ends that at once. Agents have no tool that wakes another
   agent; they only say who should go next.
 - **Show, don't summarise.** The board shows each agent's words as written. It
@@ -61,8 +61,12 @@ over the carrying without taking over the decisions.
 - **Turn capture.** A `Stop` hook records each agent's closing message, model and
   time; where an agent app runs no hooks, a watcher reads Codex's session files
   instead. The board shows the latest turn in every project.
+- **Named pairs.** A section can hold several independent Claude–Codex exchanges,
+  each with its own sessions, linked discussions, prompts and Auto-continue run.
+  Existing sections start with a Main pair. Session IDs identify a pair; branch
+  names and working directories do not.
 - **Hand-offs.** A Next turn box, prefilled with a Continue prompt that quotes the
-  latest closing message, sends to the project's pinned Claude session or Codex
+  latest closing message, sends to the selected pair's pinned Claude session or Codex
   thread. Codex prompts go through `codex queue`; Claude prompts are relayed by a
   small Board Messenger session. Each send is marked Delivered, then Answered
   when that session's next turn appears. Agents end a turn with a line such as
@@ -124,8 +128,7 @@ Start a fresh agent session and try:
 > only messages you have actually read. Preserve unresolved disagreements.
 
 To add hand-offs, follow [the hand-off guide](docs/handoff.md): install the turn
-hooks, start a Board Messenger session, and pin each project's main Claude
-session and Codex thread on the board.
+hooks, start a Board Messenger session, and create named pairs in each section and pin their Claude sessions and Codex threads on the board.
 
 ## Documentation
 

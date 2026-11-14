@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, formatUsage, getUserName, shortTime, stamp, tokens } from "./api";
+import { api, post, formatUsage, getUserName, shortTime, stamp, tokens } from "./api";
 import { BoardMarkdown } from "./components";
 import { NextTurn } from "./NextTurn";
 
@@ -117,46 +117,213 @@ function UsageStrip({ projectId, reload }) {
   );
 }
 
+function storedPair(projectId) {
+  try { return Number(localStorage.getItem(`correspondence.pair.${projectId}`)) || null; }
+  catch { return null; }
+}
+
+function rememberPair(projectId, pairId) {
+  try { localStorage.setItem(`correspondence.pair.${projectId}`, String(pairId)); }
+  catch { /* Selection still works without browser storage. */ }
+}
+
+function PairSettings({ projectId, pair, onSaved }) {
+  const [name, setName] = useState(pair.name);
+  const [discussionIds, setDiscussionIds] = useState(pair.discussion_ids);
+  const [threads, setThreads] = useState([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    api(`/threads?project_id=${encodeURIComponent(projectId)}&limit=1000`)
+      .then((list) => mounted.current && setThreads(list))
+      .catch((e) => mounted.current && setError(e.message));
+    return () => { mounted.current = false; };
+  }, [projectId]);
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const next = await post(`/pairs/${pair.id}`, { name, discussion_ids: discussionIds });
+      if (mounted.current) onSaved(next);
+    } catch (e) {
+      if (mounted.current) setError(e.message);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+  return (
+    <details className="pair-settings">
+      <summary onClick={(event) => {
+        if (!event.currentTarget.parentElement.open) {
+          setName(pair.name);
+          setDiscussionIds(pair.discussion_ids);
+        }
+      }}>Pair settings</summary>
+      <form onSubmit={save}>
+        <label className="pair-field">
+          Pair name
+          <input value={name} maxLength={100} required
+            onChange={(event) => setName(event.target.value)} />
+        </label>
+        <fieldset className="pair-discussions">
+          <legend>Linked discussions</legend>
+          <p className="hint">Choose the discussions for this exchange. Messages stay in this section.</p>
+          {threads.length === 0 && <p className="hint">No discussions in this section yet.</p>}
+          {threads.map((thread) => (
+            <label key={thread.id}>
+              <input type="checkbox" checked={discussionIds.includes(thread.id)}
+                onChange={(event) => setDiscussionIds((ids) => event.target.checked
+                  ? [...ids, thread.id] : ids.filter((id) => id !== thread.id))} />
+              {thread.title}
+            </label>
+          ))}
+        </fieldset>
+        <button className="outline" type="submit" disabled={busy || !name.trim()}>
+          {busy ? "Saving…" : "Save pair settings"}
+        </button>
+        {error && <p className="error" role="alert">{error}</p>}
+      </form>
+    </details>
+  );
+}
+
+function PairControls({ projectId, pairs, pair, onSelect, onSaved }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  async function create(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const next = await post(`/projects/${encodeURIComponent(projectId)}/pairs`, { name });
+      if (!mounted.current) return;
+      onSaved(next);
+      setAdding(false);
+      setName("");
+    } catch (e) {
+      if (mounted.current) setError(e.message);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+  return (
+    <section className="pair-controls" aria-label="Exchange pairs">
+      <div className="pair-toolbar">
+        {pairs.length > 1 ? (
+          <label>
+            Pair
+            <select aria-label="Exchange pair" value={pair?.id || ""} disabled={busy}
+              onChange={(event) => onSelect(Number(event.target.value))}>
+              {pairs.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+        ) : <strong>{pair?.name || "Exchange pairs"}</strong>}
+        <button className="text-button" onClick={() => { setAdding(!adding); setError(""); }} disabled={busy}>
+          {adding ? "Cancel new pair" : "Add pair"}
+        </button>
+      </div>
+      {pairs.length > 1 && <p className="hint">Each pair has its own sessions, prompts and Auto-continue run. Plan limits are shared.</p>}
+      {adding && (
+        <form className="new-pair" onSubmit={create} aria-label="New pair">
+          <label className="pair-field">
+            New pair name
+            <input value={name} required maxLength={100} autoFocus
+              onChange={(event) => setName(event.target.value)} />
+          </label>
+          <button className="outline" disabled={busy || !name.trim()} type="submit">
+            {busy ? "Creating…" : "Create pair"}
+          </button>
+          {error && <p className="error" role="alert">{error}</p>}
+        </form>
+      )}
+      {pair && <PairSettings key={pair.id} projectId={projectId} pair={pair} onSaved={onSaved} />}
+    </section>
+  );
+}
+
 export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback }) {
-  const [turns, setTurns] = useState(null);
+  const [pairState, setPairState] = useState({ projectId: null, items: null, selectedId: null });
+  const [turnState, setTurnState] = useState({ scope: null, items: null });
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
+  const pairs = pairState.projectId === projectId ? pairState.items : null;
+  const pair = pairs?.find((item) => item.id === pairState.selectedId) || null;
+  const pairId = pair?.id || null;
+  const scope = `${projectId || "all"}:${pairId || "all"}`;
+  const turns = turnState.scope === scope ? turnState.items : null;
   useEffect(() => {
+    if (!projectId) return;
     let live = true;
-    const path = projectId
-      ? `/turns?project_id=${encodeURIComponent(projectId)}&limit=10`
-      : "/turns";
-    const load = () =>
-      api(path)
-        .then((list) => {
-          if (live) {
-            setTurns(list);
-            setError("");
-          }
-        })
-        .catch((e) => live && setError(e.message));
+    const load = () => api(`/projects/${encodeURIComponent(projectId)}/pairs`)
+      .then((items) => {
+        if (!live) return;
+        setPairState((old) => {
+          const selected = old.projectId === projectId ? old.selectedId : storedPair(projectId);
+          const selectedId = items.some((item) => item.id === selected) ? selected : items[0]?.id || null;
+          return { projectId, items, selectedId };
+        });
+        setError("");
+      })
+      .catch((e) => live && setError(e.message));
     load();
     const poll = setInterval(() => {
       if (document.visibilityState === "visible") load();
     }, 20000);
-    return () => {
-      live = false;
-      clearInterval(poll);
-    };
+    return () => { live = false; clearInterval(poll); };
   }, [projectId, reload]);
-  useEffect(() => setTurns(null), [projectId]);
-  if (turns && !turns.length && !error) return fallback;
-  const lastTurn = (turns || []).find(
-    (turn) => turn.role !== "other" && !turn.automation,
-  );
+  useEffect(() => {
+    if (projectId && !pairId) return;
+    let live = true;
+    const path = projectId
+      ? `/turns?project_id=${encodeURIComponent(projectId)}&pair_id=${pairId}&limit=10`
+      : "/turns";
+    const load = () => api(path)
+      .then((items) => {
+        if (live) { setTurnState({ scope, items }); setError(""); }
+      })
+      .catch((e) => live && setError(e.message));
+    load();
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 20000);
+    return () => { live = false; clearInterval(poll); };
+  }, [projectId, pairId, scope, reload]);
+  function selectPair(id) {
+    rememberPair(projectId, id);
+    setError("");
+    setPairState((old) => ({ ...old, selectedId: id }));
+  }
+  function savePair(next) {
+    rememberPair(projectId, next.id);
+    setPairState((old) => ({
+      projectId,
+      items: old.items.some((item) => item.id === next.id)
+        ? old.items.map((item) => item.id === next.id ? next : item)
+        : [...old.items, next],
+      selectedId: next.id,
+    }));
+    setReload((n) => n + 1);
+  }
+  if (!projectId && turns && !turns.length && !error) return fallback;
+  const lastTurn = (turns || []).find((turn) => turn.role === "main" && !turn.automation);
   return (
     <main className="reader turns-panel" aria-label="Agent turns">
       <header className="turns-header">
         <h2>{projectId ? "Recent agent turns" : "Latest agent turns"}</h2>
         <p>
           {projectId
-            ? "Each agent’s closing message, newest first, recorded when its turn ended."
-            : "The most recent turn in each project, newest first. Closing messages are shown as the agents wrote them."}
+            ? "Each agent’s closing message for the selected pair, newest first."
+            : "The most recent turn in each pair, newest first. Closing messages are shown as the agents wrote them."}
         </p>
       </header>
       <UsageStrip projectId={projectId} reload={reload} />
@@ -165,13 +332,16 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
           {error}
         </p>
       )}
-      {projectId && turns && (
-        <NextTurn
-          projectId={projectId}
-          lastTurn={lastTurn}
-          onPinsChanged={() => setReload((n) => n + 1)}
-        />
+      {projectId && pairs && (
+        <PairControls key={projectId} projectId={projectId} pairs={pairs} pair={pair}
+          onSelect={selectPair} onSaved={savePair} />
       )}
+      {projectId && !pairs && !error && <p className="hint" role="status">Loading pairs…</p>}
+      {projectId && pair && turns && (
+        <NextTurn key={`${projectId}:${pair.id}`} pairId={pair.id} pairName={pair.name}
+          lastTurn={lastTurn} onPinsChanged={() => setReload((n) => n + 1)} />
+      )}
+      {projectId && pair && turns?.length === 0 && <p className="hint">No turns from this pair yet. Choose its sessions under Pair sessions.</p>}
       {(turns || []).map((turn, index) => (
         <article
           className={`message turn${turn.role === "other" || turn.automation ? " other-session" : ""}`}
@@ -183,6 +353,7 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
           <div className="message-content">
             <header className="message-heading">
               <strong>{turn.agent}</strong>
+              {turn.pair_name && <span className="session-tag pair-tag">{turn.pair_name}</span>}
               {turn.model && <span className="model">{turn.model}</span>}
               {turn.usage && (
                 <span
@@ -208,7 +379,10 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, fallback })
               {!projectId && (
                 <button
                   className="text-button turn-project"
-                  onClick={() => onOpenProject(turn.project)}
+                  onClick={() => {
+                    if (turn.pair_id != null) rememberPair(turn.project, turn.pair_id);
+                    onOpenProject(turn.project);
+                  }}
                 >
                   {projectNames[turn.project] || turn.project}
                 </button>

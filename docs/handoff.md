@@ -42,8 +42,10 @@ finished, copy its closing message into the other agent's chat and write
    turn's `turn_context`, and goes through the same spool and `--forward`
    command. A thread seen for the first time starts at the end of its file.
 2. **Turns panel.** When no discussion is open, the reading pane shows the
-   latest turn per project, or a project's recent turns.
-3. **Main sessions.** Each project pins one Claude session and one Codex thread.
+   latest turn per pair, or a selected pair's recent turns.
+3. **Named pairs.** Each section contains named pairs. Each pair pins one Claude
+   session and one Codex thread; a session can belong to only one pair in that
+   section. Select a pair in the turns pane, then choose its **Pair sessions**.
    Other sessions in the same folder, such as read-only advisors or scheduled
    automations, still log turns, but they are greyed and are never woken.
    The Claude app sometimes reopens a conversation under a new session id
@@ -62,7 +64,9 @@ finished, copy its closing message into the other agent's chat and write
    never handed out again, because it may have been delivered with only its
    report lost; if no outcome arrives within two minutes, the user can give up
    on it, which marks it failed and frees the agent for the next prompt.
-   Changing a main session withdraws the prompts still waiting for the old one,
+   Changing a session or its machine stops only that pair's run and withdraws
+   its unclaimed auto prompts, plus prompts waiting for its old session.
+   Claimed prompts are preserved because they may already have been delivered,
    and archiving a project withdraws all of its waiting prompts.
 5. **Delivery.**
    - Codex: `codex queue --thread <thread> --message <text>`. The Codex desktop
@@ -160,9 +164,9 @@ next. All four are live.
   project or all of them.
 - **3d. Auto-continue.** The Next turn box offers "Auto-continue for N
   hand-offs (1–50), stop at X% of any plan limit (10–100)", and Stop while a
-  run is going. Every few seconds the board checks each running project: when
+  run is going. Every few seconds the board checks each running pair: when
   the latest turn from a main session declares `Next: Claude` or `Next: Codex`,
-  no prompt has been sent since that turn arrived and none in the project is
+  no prompt has been sent since that turn arrived and none in the pair is
   still on its way, the board sends that turn's Continue prompt to the named
   agent, as Send would, and marks it `auto` in the send list. If the latest
   turn already names an agent when the run starts, the first hand-off goes at
@@ -172,10 +176,10 @@ next. All four are live.
   plan-limit reading reaches the ceiling (a window that has reset since it was
   read no longer counts); when a main session is unpinned; or when the user
   presses Stop. Stopping withdraws the run's prompts not yet picked up, and a
-  run started afterwards tries that turn again. One run goes at a time. Turns
+  run started afterwards tries that turn again. One run goes at a time in each pair. Turns
   from advisor sessions never drive a run.
 
-  Each prompt records which turn was the project's latest when it was sent, and
+  Each prompt records which turn was the pair's latest when it was sent, and
   a run tests that record, not timestamps, so machines whose clocks disagree
   cannot make it send twice. A run spends a hand-off in the same database
   transaction that records the prompt, and only while it is still going, so a
@@ -183,3 +187,38 @@ next. All four are live.
   (7 November 2026) had three modes, Manual, Hold and Cruise. Hold only
   cancelled waiting prompts and blocked Send, which Cancel and Stop already
   cover, so the switch became one control.
+
+## Several pairs in one section
+
+Use **Add pair** to create an exchange, name it under **Pair settings**, link
+its discussions, and choose its two sessions under **Pair sessions**. A pair
+can work in a separate Git worktree or the same checkout as another pair.
+Its session IDs, not its working directory or branch, control routing. The
+selector changes the prompt, recent turns, delivery history and Auto-continue
+controls together; an unsent draft is cleared when changing pairs.
+
+Each run has its own hand-off allowance, pending prompts and Stop. A failure,
+repin or Stop in one pair leaves other pairs alone. Plan-limit readings are
+account-wide: a ceiling can stop several runs using that account. Sends check
+the selected source and target pins again inside the write transaction; a
+repin after a prompt was prepared rejects the stale send without spending a
+hand-off. Pin changes stop the affected run, which can then be started anew.
+
+Link a pair's discussions explicitly. Turn-to-discussion links are filtered
+to those IDs; in a multi-pair section an unconfigured pair gets no inferred
+links. Links still correlate posts by agent and time window, not a posting
+session: a deliberately shared discussion remains shared.
+
+The same Stop-hook command can be used in each checkout with the section's
+`--project` ID. It already records the session ID; no pair ID or branch
+heuristic is required in the hook. Gitignored local hook files are not
+copied into a newly created worktree, so install the local Codex and Claude
+hook settings there before opening worktree-rooted chats. A chat opened in
+the main checkout and using `cd` to work in a worktree keeps its existing
+capture setup. Do not duplicate a user-level hook in project settings.
+
+The schema upgrade creates a Main pair for each existing section and preserves
+all existing pins, prompts, claims, run state and correspondence. It does not
+start any run. Internal browser APIs now use `/api/pairs/{pair_id}/agents`,
+`/auto` and `/auto/stop`, and dispatch requests carry `pair_id` plus the
+expected pin map. The discussion MCP contract is unchanged.

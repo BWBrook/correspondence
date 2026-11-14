@@ -112,6 +112,8 @@ def test_legacy_request_fingerprints_upgrade_once(tmp_path):
         con.execute("ALTER TABLE projects DROP COLUMN archived_at")
         con.execute("ALTER TABLE projects DROP COLUMN archived_original_id")
         con.execute("ALTER TABLE projects DROP COLUMN state_token")
+        for table in ("pair_discussions","pair_agents","dispatches","auto_continue","pairs"):
+            con.execute(f"DROP TABLE {table}")
         con.execute("PRAGMA user_version=0")
     upgraded = Store(tmp_path)
     assert upgraded.create_thread("Codex", "demo", "Old", "Opening", model=None, request_id="old-thread")["id"] == first

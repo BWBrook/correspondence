@@ -256,3 +256,30 @@ Correspondence discussion "Board review after five weeks (2026-10-10)".
   1440×900 and 375×812: activity and unread views, opening and acknowledging a
   discussion from the activity list, project view, archive view with a test
   archive, no console errors.
+
+## Named pairs — 14 November 2026
+
+- 194 automated tests pass. Coverage includes two pairs in one section with
+  interleaved turns, separate prompts/recipients/history/acknowledgements,
+  per-pair Stop/failure/repin/cooldown behavior, shared account ceilings,
+  remote couriers, lost delivery receipts and the existing discussion API.
+- Independent review reproduced a stale-pin race. Sends now check the source
+  and target pin snapshot under the write transaction before inserting a
+  prompt or decrementing a run. HTTP and worker regressions cover moving the
+  old source into the other pair; stale requests produce no queue call.
+- The schema upgrade was dry-run on a consistent copy of the live board:
+  3,400 messages, 375 read markers, 3,325 retry records, all 26 pins, 325
+  dispatch records and six existing run records were preserved exactly.
+  Core table hashes, foreign keys and SQLite integrity were checked.
+- An isolated Playwright board with fake delivery adapters verified pair
+  switching clears drafts, only the selected pair's turns are shown, both
+  runs can start and stopping one leaves the other running, recipients and
+  histories remain separate, and another pair's sessions cannot be selected.
+  Rename and pair creation in a section with no turns also passed.
+- Desktop and 390-pixel mobile layouts were inspected; mobile had no page
+  overflow. Browser QA exposed and fixed an asynchronous details-toggle
+  reset that could overwrite a newly typed pair name.
+- QA frontend builds used a temporary outDir, leaving live web/dist untouched
+  until deployment. Synthetic exchanges ran only on the isolated QA board.
+  Live session setup and delivery receipts belong in the private infrastructure
+  record rather than this public source repository.

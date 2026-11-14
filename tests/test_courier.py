@@ -15,6 +15,10 @@ CLAUDE = "2114b555-0c74-405f-bb3d-7860a2e979f1"
 HOST_CLAUDE = "f4766779-d9e6-4b66-b078-9f3b4b611a97"
 
 
+def pair_id(store, project="project"):
+    return store.pairs(project)[0]["id"]
+
+
 def line(kind, payload, timestamp="2026-11-06T02:31:10.948Z"):
     return json.dumps({"timestamp": timestamp, "type": kind, "payload": payload}) + "\n"
 
@@ -32,13 +36,13 @@ def world(tmp_path):
     sessions.mkdir()
     store = Store(board)
     store.create_project("project", "Project")
-    store.set_project_agent("project", "Codex", THREAD, "wsl")
-    store.set_project_agent("project", "Claude", CLAUDE, "wsl")
+    store.set_pair_agent(pair_id(store, "project"), "Codex", THREAD, "wsl")
+    store.set_pair_agent(pair_id(store, "project"), "Claude", CLAUDE, "wsl")
     rollout = home / "sessions/2026/10/02" / f"rollout-2026-10-02T16-01-33-{THREAD}.jsonl"
     rollout.parent.mkdir(parents=True)
     rollout.write_text(turn("old", "Before the courier started."))
     fake = tmp_path / "fake-codex"
-    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {tmp_path}/codex-args\necho "Queued message q1 for thread $3."\n')
+    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" >> {tmp_path}/codex-args\necho "Queued message q1 for thread $3."\n')
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     env = {"PATH": "/usr/bin:/bin", "CODEX_HOME": str(home), "CORRESPONDENCE_DATA_DIR": str(local),
            "CORRESPONDENCE_CODEX": str(fake), "CORRESPONDENCE_CLAUDE_SESSIONS": str(sessions)}
@@ -73,7 +77,7 @@ def test_pinned_thread_turns_reach_the_board_but_history_is_not_replayed(world):
 
 def test_unpinned_threads_are_not_watched(world):
     world["run"]()
-    world["store"].set_project_agent("project", "Codex", None)
+    world["store"].set_pair_agent(pair_id(world["store"], "project"), "Codex", None)
     with open(world["rollout"], "a") as handle:
         handle.write(turn("t1", "Nobody is listening."))
     world["run"]()
@@ -111,21 +115,21 @@ def test_turns_wait_while_the_board_is_unreachable(world):
 def test_codex_prompts_for_this_machine_are_queued_locally(world):
     store = world["store"]
     store.create_project("host", "Host project")
-    store.set_project_agent("host", "Codex", "01a17cc1-host-thread")
-    mine = store.create_dispatch("project", "Codex", "Continue, please.")
-    theirs = store.create_dispatch("host", "Codex", "Not for wsl.")
+    store.set_pair_agent(pair_id(store, "host"), "Codex", "01a17cc1-host-thread")
+    mine = store.create_dispatch(pair_id(store, "project"), "Codex", "Continue, please.")
+    theirs = store.create_dispatch(pair_id(store, "host"), "Codex", "Not for wsl.")
     assert mine["machine"] == "wsl" and theirs["machine"] is None
     result = world["run"]()
     assert "delivered" in result.stderr
     assert (world["tmp"] / "codex-args").read_text().split("\n")[:5] == ["queue", "--thread", THREAD, "--message", "Continue, please."]
-    status = {d["id"]: d["status"] for d in store.list_dispatches("project") + store.list_dispatches("host")}
+    status = {d["id"]: d["status"] for d in store.list_dispatches(pair_id(store, "project")) + store.list_dispatches(pair_id(store, "host"))}
     assert status == {mine["id"]: "delivered", theirs["id"]: "queued"}
 
 
 def test_a_delivery_whose_report_is_lost_is_reported_next_round(world, monkeypatch):
     monkeypatch.setenv("CORRESPONDENCE_CODEX", world["env"]["CORRESPONDENCE_CODEX"])
     store = world["store"]
-    sent = store.create_dispatch("project", "Codex", "Continue, please.")
+    sent = store.create_dispatch(pair_id(store, "project"), "Codex", "Continue, please.")
 
     class Dropping(LocalBoard):
         drops = 1
@@ -139,9 +143,9 @@ def test_a_delivery_whose_report_is_lost_is_reported_next_round(world, monkeypat
     board, unreported = Dropping(store, "wsl"), {}
     with pytest.raises(ConnectionError):
         courier.exchange(board, lambda text: None, unreported)
-    assert store.list_dispatches("project", 1)[0]["status"] == "queued" and sent["id"] in unreported
+    assert store.list_dispatches(pair_id(store, "project"), 1)[0]["status"] == "queued" and sent["id"] in unreported
     courier.exchange(board, lambda text: None, unreported)
-    assert store.list_dispatches("project", 1)[0]["status"] == "delivered" and unreported == {}
+    assert store.list_dispatches(pair_id(store, "project"), 1)[0]["status"] == "delivered" and unreported == {}
     assert (world["tmp"] / "codex-args").read_text().count("queue") == 1  # delivered once, reported once
 
 
@@ -158,8 +162,8 @@ def test_courier_reports_claude_sessions_and_its_own_presence(world):
 def test_serve_is_scoped_to_its_machine(world, tmp_path):
     store = world["store"]
     store.create_project("host", "Host project")
-    store.set_project_agent("host", "Claude", HOST_CLAUDE)
-    host = store.create_dispatch("host", "Claude", "For the Mac mini.")
+    store.set_pair_agent(pair_id(store, "host"), "Claude", HOST_CLAUDE)
+    host = store.create_dispatch(pair_id(store, "host"), "Claude", "For the Mac mini.")
     requests = [{"op": "waiting", "target": "Claude"}, {"op": "claim", "id": host["id"]},
                 {"op": "finish", "id": host["id"], "delivered": True}, {"op": "nonsense"}]
     source, sink = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
@@ -169,16 +173,16 @@ def test_serve_is_scoped_to_its_machine(world, tmp_path):
     replies = [json.loads(l) for l in sink.read_text().splitlines()]
     assert replies[0] == {"result": []} and replies[1] == {"result": False}
     assert "not for this machine" in replies[2]["error"] and "error" in replies[3]
-    assert store.list_dispatches("host")[0]["status"] == "queued"
+    assert store.list_dispatches(pair_id(store, "host"))[0]["status"] == "queued"
     with pytest.raises(Conflict):
-        LocalBoard(store, None).store.finish_dispatch(store.create_dispatch("project", "Claude", "x")["id"], True, "")
+        LocalBoard(store, None).store.finish_dispatch(store.create_dispatch(pair_id(store, "project"), "Claude", "x")["id"], True, "")
 
 
 def test_remote_messenger_relays_a_claude_prompt(world, capsys, monkeypatch):
     monkeypatch.setenv("CORRESPONDENCE_CLAUDE_SESSIONS", str(world["sessions"]))
     (world["sessions"] / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": CLAUDE,
                                                          "name": "Extinction Vortex", "status": "idle"}))
-    sent = world["store"].create_dispatch("project", "Claude", "Your turn.")
+    sent = world["store"].create_dispatch(pair_id(world["store"], "project"), "Claude", "Your turn.")
     assert LocalBoard(world["store"]).waiting("Claude") == []
     board = RemoteBoard(world["serve"])
     try:
@@ -194,7 +198,7 @@ def test_remote_messenger_relays_a_claude_prompt(world, capsys, monkeypatch):
 
 
 def test_announce_sends_a_new_threads_latest_turn_so_it_can_be_pinned(world):
-    world["store"].set_project_agent("project", "Codex", None)
+    world["store"].set_pair_agent(pair_id(world["store"], "project"), "Codex", None)
     with open(world["rollout"], "a") as handle:
         handle.write(turn("latest", "The newest closing message."))
     result = subprocess.run([sys.executable, "-m", "correspondence.courier", "--once", "--machine", "wsl",
@@ -235,3 +239,76 @@ def test_announce_introduces_a_claude_session(world, tmp_path, monkeypatch):
     entry = courier.announce(tmp_path / "codex", tmp_path / "spool", CLAUDE, "project", "macbook")
     assert (entry["agent"], entry["model"], entry["message"], entry["machine"]) == ("Claude", "claude-opus-5-5", "Ready when you are.", "macbook")
     assert courier.announce(tmp_path / "codex", tmp_path / "spool", "no-such-session-id", "project", "macbook") is None
+
+
+def test_two_remote_codex_pairs_are_delivered_and_watched_separately(world):
+    store = world['store']
+    main = pair_id(store)
+    second = store.create_pair('project', 'Worktree')['id']
+    second_thread = '01a0fb34-worktree-thread'
+    store.set_pair_agent(second, 'Codex', second_thread, 'wsl')
+    other_rollout = world['rollout'].with_name('rollout-2026-10-02T16-01-34-' + second_thread + '.jsonl')
+    other_rollout.write_text(turn('old-second', 'Earlier worktree turn.'))
+    assert world['run']().returncode == 0
+    assert ledger(world['board']) == []
+    first = store.create_dispatch(main, 'Codex', 'Main pair prompt.')
+    other = store.create_dispatch(second, 'Codex', 'Worktree pair prompt.')
+    result = world['run']()
+    assert result.returncode == 0
+    args = (world['tmp'] / 'codex-args').read_text().splitlines()
+    assert args == ['queue', '--thread', THREAD, '--message', 'Main pair prompt.',
+                    'queue', '--thread', second_thread, '--message', 'Worktree pair prompt.']
+    assert [(d['id'], d['pair_id'], d['session_id'], d['status']) for d in store.list_dispatches(main)] == [(first['id'], main, THREAD, 'delivered')]
+    assert [(d['id'], d['pair_id'], d['session_id'], d['status']) for d in store.list_dispatches(second)] == [(other['id'], second, second_thread, 'delivered')]
+    with open(world['rollout'], 'a') as handle:
+        handle.write(turn('main-next', 'Main reply.', timestamp='2026-11-06T05:00:00Z'))
+    with open(other_rollout, 'a') as handle:
+        handle.write(turn('worktree-next', 'Worktree reply.', timestamp='2026-11-06T05:00:01Z'))
+    assert world['run']().returncode == 0
+    assert {(r['session_id'], r['message']) for r in ledger(world['board'])} == {
+        (THREAD, 'Main reply.'), (second_thread, 'Worktree reply.'),
+    }
+    store.set_pair_agent(second, 'Codex', None)
+    with open(other_rollout, 'a') as handle:
+        handle.write(turn('unwatched', 'Do not capture.', timestamp='2026-11-06T05:00:02Z'))
+    with open(world['rollout'], 'a') as handle:
+        handle.write(turn('still-watched', 'Main continues.', timestamp='2026-11-06T05:00:03Z'))
+    assert world['run']().returncode == 0
+    assert ledger(world['board'])[-1]['message'] == 'Main continues.'
+    assert 'Do not capture.' not in {r['message'] for r in ledger(world['board'])}
+
+
+def test_lost_delivery_outcome_does_not_duplicate_either_pairs_prompt(world, monkeypatch):
+    monkeypatch.setenv('CORRESPONDENCE_CODEX', world['env']['CORRESPONDENCE_CODEX'])
+    store = world['store']
+    main = pair_id(store)
+    second = store.create_pair('project', 'Worktree')['id']
+    second_thread = '01a0fb34-worktree-thread'
+    store.set_pair_agent(second, 'Codex', second_thread, 'wsl')
+    first = store.create_dispatch(main, 'Codex', 'Main only.')
+    other = store.create_dispatch(second, 'Codex', 'Worktree only.')
+
+    class Dropping(LocalBoard):
+        drops = 1
+
+        def finish(self, *args):
+            if self.drops:
+                self.drops -= 1
+                raise ConnectionError('Lost acknowledgement')
+            return super().finish(*args)
+
+    board, unreported = Dropping(store, 'wsl'), {}
+    with pytest.raises(ConnectionError):
+        courier.exchange(board, lambda text: None, unreported)
+    assert set(unreported) == {first['id']}
+    assert store.list_dispatches(second)[0]['claimed_at'] is None
+    threads = courier.exchange(board, lambda text: None, unreported)
+    assert threads == {THREAD: 'project', second_thread: 'project'}
+    assert unreported == {}
+    courier.exchange(board, lambda text: None, unreported)
+    args = (world['tmp'] / 'codex-args').read_text().splitlines()
+    assert args == ['queue', '--thread', THREAD, '--message', 'Main only.',
+                    'queue', '--thread', second_thread, '--message', 'Worktree only.']
+    assert store.list_dispatches(main)[0]['status'] == store.list_dispatches(second)[0]['status'] == 'delivered'
+    assert store.list_dispatches(main)[0]['id'] == first['id']
+    assert store.list_dispatches(second)[0]['id'] == other['id']

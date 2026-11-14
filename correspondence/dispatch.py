@@ -244,7 +244,7 @@ def serve(board: LocalBoard, stdin=None, stdout=None) -> None:
     """Answer one JSON request per line from another machine, scoped to its prompts."""
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     handlers = {
-        "waiting": lambda a: [{k: d[k] for k in ("id", "project_id", "target", "session_id", "body", "primed", "user_name")}
+        "waiting": lambda a: [{k: d[k] for k in ("id", "project_id", "pair_id", "pair_name", "target", "session_id", "body", "primed", "user_name")}
                               for d in board.waiting(a["target"])],
         "claim": lambda a: board.claim(int(a["id"])),
         "finish": lambda a: board.finish(int(a["id"]), bool(a["delivered"]), str(a.get("detail") or "")),
@@ -285,7 +285,7 @@ def collect(board) -> list[dict]:
         session = claude_session(dispatch["session_id"])
         if session is not None and session.get("status") == "idle" and board.claim(dispatch["id"]):
             ready.append({"dispatch": dispatch["id"], "to": session["name"],
-                          "project": dispatch["project_id"],
+                          "project": dispatch["project_id"], "pair_id": dispatch["pair_id"], "pair_name": dispatch["pair_name"],
                           "message": f"{relay_note(dispatch)}\n\n{dispatch['body']}"})
     return ready
 

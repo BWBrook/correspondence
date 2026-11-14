@@ -1322,3 +1322,98 @@ dialog::backdrop {
 .read-at {
   font-size: 12px;
 }
+
+.pair-controls {
+  margin-bottom: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.pair-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.pair-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pair-toolbar select {
+  min-width: 10em;
+  max-width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+}
+.pair-controls .hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.pair-settings {
+  margin-top: 10px;
+  font-size: 13px;
+}
+.pair-settings summary {
+  color: var(--teal);
+  cursor: pointer;
+}
+.pair-settings form, .new-pair {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  margin-top: 12px;
+}
+.pair-field {
+  display: grid;
+  gap: 5px;
+  width: min(100%, 32em);
+}
+.pair-field input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.pair-discussions {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+}
+.pair-discussions legend {
+  font-weight: 600;
+}
+.pair-discussions label {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+.pair-discussions input {
+  flex: 0 0 auto;
+}
+.pair-name {
+  font-weight: 400;
+  color: var(--muted);
+}
+.pair-tag {
+  color: var(--teal);
+}
+.next-turn header {
+  flex-wrap: wrap;
+}
+@media (max-width: 600px) {
+  .pair-toolbar label {
+    flex: 1 1 100%;
+  }
+  .pair-toolbar select {
+    flex: 1;
+    width: 0;
+  }
+}

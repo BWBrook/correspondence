@@ -186,6 +186,8 @@ def test_concurrent_schema1_migration_and_reopen_do_not_rehash(board):
         con.execute("ALTER TABLE projects DROP COLUMN archived_at")
         con.execute("ALTER TABLE projects DROP COLUMN archived_original_id")
         con.execute("ALTER TABLE projects DROP COLUMN state_token")
+        for table in ("pair_discussions","pair_agents","dispatches","auto_continue","pairs"):
+            con.execute(f"DROP TABLE {table}")
         con.execute("PRAGMA user_version=1")
     gate = Barrier(6)
     def initialize(_):
@@ -329,6 +331,8 @@ def test_schema2_upgrade_generates_tokens_once_and_preserves_archives(board):
     before = records(board)
     with board.connect(write=True) as con:
         con.execute("ALTER TABLE projects DROP COLUMN state_token")
+        for table in ("pair_discussions","pair_agents","dispatches","auto_continue","pairs"):
+            con.execute(f"DROP TABLE {table}")
         con.execute("PRAGMA user_version=2")
     gate = Barrier(4)
     def initialize(_):

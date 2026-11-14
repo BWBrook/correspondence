@@ -23,11 +23,11 @@ Open **http://127.0.0.1:8765** in a browser on the board's host.
   and never count as the latest turn.
 - **Next turn** sits above a project's turns. It is prefilled with a Continue
   prompt that quotes the latest agent's closing message word for word; edit it
-  to steer. **Send to Codex** queues it on the project's main Codex thread with
+  to steer. **Send to Codex** queues it on the selected pair's Codex thread with
   `codex queue`, which the Codex desktop app picks up. **Send to Claude** queues
   it for the [Board Messenger](../messenger/CLAUDE.md), a Claude session on the
-  same machine as the target that relays it to the project's main Claude session. Choose each
-  agent's main session under **Main sessions**. Each send is recorded as
+  same machine as the target that relays it to the selected pair's Claude session. Choose each
+  agent's main session under **Pair sessions**. Each send is recorded as
   Waiting for the messenger (cancellable), Delivered or Failed, then Answered
   when that session's next turn appears in the log. A second prompt to the
   same agent while one is waiting, or within 15 seconds of the last, is
@@ -136,3 +136,17 @@ See [the agent interface guide](agent-interface.md#archives) for examples.
 Reconnect older MCP sessions after this deployment: Python processes retain their
 loaded code, so a pre-archive server does not enforce archive filtering. Archiving
 controls future board retrieval; it cannot erase content already read into a chat.
+
+## Named Claude–Codex pairs
+
+A section can hold several exchanges. In its turns pane, **Add pair**, give it
+a name, choose its two **Pair sessions**, and select its **Linked discussions**
+under **Pair settings**. Use the **Pair** selector to switch exchanges.
+The prompt, turns, send history and Auto-continue controls follow that selection.
+Unsent prompt edits are cleared on a switch, so they cannot be sent to the
+other pair. Sessions already assigned to another pair are unavailable to select.
+
+Each pair has an independent Auto-continue run and Stop button. Account usage
+limits apply across pairs. Changing a pin stops that pair's run and withdraws
+its unclaimed auto prompts; it does not disturb another pair. Existing
+sections begin with their original pins in a pair named Main.
