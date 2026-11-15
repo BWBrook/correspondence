@@ -15,6 +15,20 @@ CLAUDE = "2114b555-0c74-405f-bb3d-7860a2e979f1"
 HOST_CLAUDE = "f4766779-d9e6-4b66-b078-9f3b4b611a97"
 
 
+def test_thread_names_use_latest_saved_name_and_ignore_partial_records(tmp_path):
+    assert courier.thread_names(tmp_path) == {}
+    path = tmp_path / 'session_index.jsonl'
+    path.write_text('\n'.join([
+        json.dumps({'id': THREAD, 'thread_name': 'Initial title'}),
+        'not json',
+        '[]',
+        json.dumps({'id': THREAD, 'thread_name': 'Walker, Hays & Kasting'}),
+        json.dumps({'id': THREAD, 'thread_name': '  '}),
+        '{"id":',
+    ]) + '\n')
+    assert courier.thread_names(tmp_path) == {THREAD: 'Walker, Hays & Kasting'}
+
+
 def pair_id(store, project="project"):
     return store.pairs(project)[0]["id"]
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, post, shortTime } from "./api";
 
 const AGENTS = ["Claude", "Codex"];
@@ -118,11 +118,25 @@ function newerSession(agents, agent) {
   );
 }
 
-function MainSessions({ pairId, expectedState, agents, onChange }) {
+function MainSessions({ pairId, expectedState, agents, onChange, onRefresh, open, onToggle }) {
   const mounted = useMounted();
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [saving, setSaving] = useState(null);
+  async function refresh() {
+    setError("");
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } catch (e) {
+      if (mounted.current) setError(e.message);
+    } finally {
+      if (mounted.current) setRefreshing(false);
+    }
+  }
   async function pin(agent, session_id) {
     setError("");
+    setSaving(agent);
     try {
       const next = await post(`/pairs/${pairId}/agents`, {
         agent,
@@ -132,20 +146,26 @@ function MainSessions({ pairId, expectedState, agents, onChange }) {
       if (mounted.current) onChange(next);
     } catch (e) {
       if (mounted.current) setError(e.message);
+    } finally {
+      if (mounted.current) setSaving(null);
     }
   }
   return (
-    <details className="main-sessions">
+    <details className="main-sessions" open={open} onToggle={(event) => onToggle(event.currentTarget.open)}>
       <summary>Pair sessions</summary>
       <p className="hint">
-        Prompts go only to these sessions. Turns from other sessions, such as
-        advisors or automations, are greyed and never woken.
+        Choose each agent’s chat. Selections save immediately. Chats appear
+        after their first completed turn; refresh if you have just finished one.
       </p>
+      <button className="text-button" onClick={refresh} disabled={refreshing || Boolean(saving)}>
+        {refreshing ? "Refreshing sessions…" : "Refresh sessions"}
+      </button>
       {AGENTS.map((agent) => (
         <label key={agent}>
           {agent}
           <select
             value={agents.pins[agent] || ""}
+            disabled={refreshing || Boolean(saving)}
             onChange={(event) => pin(agent, event.target.value)}
           >
             <option value="">Not set</option>
@@ -154,18 +174,19 @@ function MainSessions({ pairId, expectedState, agents, onChange }) {
               .map((s) => (
                 <option key={s.session_id} value={s.session_id}
                   disabled={s.pair_id != null && s.pair_id !== pairId}>
-                  {s.session_id.slice(0, 8)} · {s.turns}{" "}
+                  {s.name || s.excerpt.replace(/\s+/g, " ").slice(0, 65) || "Unnamed chat"}
+                  {" · "}{s.session_id.slice(0, 8)} · {s.turns}{" "}
                   {s.turns === 1 ? "turn" : "turns"} · last{" "}
                   {shortTime(s.last_at)}
                   {s.automation ? " · automation" : ""}
                   {s.machine ? ` · ${s.machine}` : ""}
-                  {s.pair_id != null && s.pair_id !== pairId ? ` · used by ${s.pair_name}` : ""} ·{" "}
-                  {s.excerpt.replace(/\s+/g, " ").slice(0, 50)}
+                  {s.pair_id != null && s.pair_id !== pairId ? ` · used by ${s.pair_name}` : ""}
                 </option>
               ))}
           </select>
         </label>
       ))}
+      {saving && <p className="hint" role="status">Saving {saving} session…</p>}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -175,7 +196,7 @@ function MainSessions({ pairId, expectedState, agents, onChange }) {
   );
 }
 
-export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChanged, onStateChanged }) {
+export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChanged, onStateChanged, sessionsOpen, onSessionsToggle }) {
   const mounted = useMounted();
   const [agents, setAgents] = useState({
     pins: {},
@@ -190,6 +211,18 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
   const [sending, setSending] = useState(null);
   const [error, setError] = useState("");
   const statusChanged = useRef(onStateChanged);
+  const agentsRequest = useRef(0);
+  const pinsChanged = useRef(onPinsChanged);
+  const currentExpectedState = useRef(expectedState);
+  pinsChanged.current = onPinsChanged;
+  currentExpectedState.current = expectedState;
+  const refreshSessions = useCallback(async () => {
+    const request = ++agentsRequest.current;
+    const next = await api(`/pairs/${pairId}/agents`);
+    if (!mounted.current || request !== agentsRequest.current) return;
+    setAgents({ ...next, pair_id: pairId });
+    if (next.state_token !== currentExpectedState.current) pinsChanged.current(next);
+  }, [pairId]);
   const previousStatus = useRef(null);
   statusChanged.current = onStateChanged;
   const statusKey = JSON.stringify([
@@ -217,9 +250,7 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
   useEffect(() => {
     let live = true;
     const load = () => {
-      api(`/pairs/${pairId}/agents`)
-        .then((a) => live && setAgents({ ...a, pair_id: pairId }))
-        .catch(() => {});
+      refreshSessions().catch(() => {});
       api(`/dispatches?pair_id=${pairId}&limit=5`)
         .then((d) => live && setDispatches(d))
         .catch(() => {});
@@ -235,7 +266,7 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
       live = false;
       clearInterval(poll);
     };
-  }, [pairId]);
+  }, [pairId, refreshSessions]);
   const pending = dispatches.some((d) => d.status === "queued");
   const running = auto.running;
   useEffect(() => {
@@ -257,6 +288,7 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
     try {
       const next = await post(`/pairs/${pairId}/agents`, { agent, session_id, expected_state: expectedState });
       if (!mounted.current) return;
+      agentsRequest.current += 1;
       setAgents({ ...next, pair_id: pairId });
       onPinsChanged(next);
     } catch (e) {
@@ -419,7 +451,11 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
         pairId={pairId}
         expectedState={expectedState}
         agents={agents}
+        onRefresh={refreshSessions}
+        open={sessionsOpen}
+        onToggle={onSessionsToggle}
         onChange={(next) => {
+          agentsRequest.current += 1;
           setAgents({ ...next, pair_id: pairId });
           onPinsChanged(next);
         }}

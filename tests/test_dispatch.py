@@ -50,6 +50,26 @@ def test_pins_mark_other_sessions_and_heartbeats(setup):
     assert client.post(f"/api/pairs/{pair_id(client)}/agents", json={"expected_state": client.app.state.store.pair(pair_id(client))["state_token"], "agent": "Codex", "session_id": None}, headers=HEADERS).json()["pins"] == {}
 
 
+def test_session_picker_reads_current_local_chat_names_without_changing_pins(claude, monkeypatch):
+    client, tmp_path = claude
+    home = tmp_path / 'codex-home'
+    home.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    path = home / 'session_index.jsonl'
+    path.write_text(json.dumps({'id': MAIN, 'thread_name': 'Walker, Hays & Kasting'}) + '\n')
+    pair = pair_id(client)
+    before = pair_pins(client)
+    agents = client.get(f'/api/pairs/{pair}/agents').json()
+    names = {s['session_id']: s['name'] for s in agents['sessions']}
+    assert names[MAIN] == 'Walker, Hays & Kasting'
+    assert names[CLAUDE] == 'Silurian Plants'
+    with path.open('a') as f:
+        f.write(json.dumps({'id': MAIN, 'thread_name': 'Renamed chat'}) + '\n')
+    fresh = client.get(f'/api/pairs/{pair}/agents').json()
+    assert next(s['name'] for s in fresh['sessions'] if s['session_id'] == MAIN) == 'Renamed chat'
+    assert pair_pins(client) == before
+
+
 def test_codex_dispatch_queues_on_the_pinned_thread_and_tracks_the_answer(setup):
     client, tmp_path = setup
     body = {"expected_state": client.app.state.store.pair(pair_id(client))["state_token"], "pair_id": pair_id(client), "expected_pins": pair_pins(client), "target": "Codex", "body": "Continue, please."}
@@ -194,6 +214,10 @@ def test_pins_on_another_machine_wait_for_its_courier(setup, monkeypatch):
     from correspondence.dispatch import LocalBoard
     client, tmp_path = setup
     remote_codex, remote_claude = "01a0fb34-wsl-thread", "2114b555-wsl-session"
+    home = tmp_path / 'codex-home'
+    home.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    (home / 'session_index.jsonl').write_text(json.dumps({'id': remote_codex, 'thread_name': 'Different local chat'}) + '\n')
     with open(tmp_path / "turns.jsonl", "a") as ledger:
         for agent, session in (("Codex", remote_codex), ("Claude", remote_claude)):
             ledger.write(json.dumps({"recorded_at": "2026-11-06T03:50:42+00:00", "agent": agent, "project": "p",
@@ -212,6 +236,9 @@ def test_pins_on_another_machine_wait_for_its_courier(setup, monkeypatch):
     agents = client.get(f"/api/pairs/{pair_id(client)}/agents").json()
     assert agents["couriers"] == {"wsl": True} and agents["messenger_listening"] is True
     assert agents["claude_live"] == {"name": "Extinction Vortex", "status": "idle"}
+    names = {s['session_id']: s['name'] for s in agents['sessions']}
+    assert names[remote_claude] == 'Extinction Vortex'
+    assert names[remote_codex] is None
 
 
 def test_a_session_gets_the_full_relay_note_only_until_one_prompt_is_delivered(claude, capsys):

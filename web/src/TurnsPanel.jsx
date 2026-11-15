@@ -420,6 +420,7 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onS
   const [turnState, setTurnState] = useState({ scope: null, items: null });
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
+  const [openSessions, setOpenSessions] = useState(null);
   const pairRequest = useRef(0);
   const archived = pairView.projectId === projectId && pairView.archived;
   const pairs = pairState.projectId === projectId ? pairState[archived ? "archived" : "active"] : null;
@@ -548,6 +549,8 @@ export function TurnsPanel({ projectId, projectNames, onOpenProject, onBack, onS
       )}
       {projectId && pair && !archived && turns && (
         <NextTurn key={`${projectId}:${pair.id}:${pair.state_token}`} pairId={pair.id} pairName={pair.name}
+          sessionsOpen={openSessions === pair.id}
+          onSessionsToggle={(open) => setOpenSessions(open ? pair.id : null)}
           expectedState={pair.state_token} lastTurn={lastTurn} onPinsChanged={(next) => {
             pairRequest.current += 1;
             setPairState((old) => ({

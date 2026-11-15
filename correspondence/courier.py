@@ -53,6 +53,25 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
 
 
+def thread_names(home: Path) -> dict[str, str]:
+    names = {}
+    try:
+        with (home / "session_index.jsonl").open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                session, name = entry.get("id"), entry.get("thread_name")
+                if isinstance(session, str) and isinstance(name, str) and name.strip():
+                    names[session] = " ".join(name.split())[:200]
+    except OSError:
+        pass
+    return names
+
+
 def rollout_path(home: Path, thread: str) -> Path | None:
     """The thread's rollout file; Codex compresses older ones to ``.jsonl.zst``."""
     found = sorted((home / "sessions").glob(f"*/*/*/rollout-*-{thread}.jsonl"))

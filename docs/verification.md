@@ -338,3 +338,18 @@ verified at 390 pixels; discussion labels remain readable at both widths.
   overflow was present. The interface labels its displayed history limits;
   complete records remain stored. Builds and synthetic delivery stayed isolated
   from the live board and real agent sessions.
+
+## Session selection — 15 November 2026
+
+- 42 targeted courier, dispatch and pair-archive tests pass. New coverage checks
+  saved chat-name updates, partial index records, correct local/remote name
+  scoping, and metadata reads leaving pins unchanged.
+- Independent review verified that metadata refreshes preserve pair state and
+  that stale responses are discarded after pin changes or scope changes.
+- Isolated browser QA connected both agents consecutively while the chooser
+  remained open across token changes. Saved names appeared in the options;
+  Refresh sessions picked up renamed and newly completed chats without changing
+  pins, Auto or an edited prompt. A failed lookup remained visible and recovered
+  on refresh. Sessions belonging to the other pair stayed disabled.
+- Desktop and 390-pixel mobile checks passed without page overflow. Synthetic
+  setup sent no agent prompts. Builds used an isolated temporary outDir.

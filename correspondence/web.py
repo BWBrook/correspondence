@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .runtime import access_log_config, board_info
 from .store import Conflict, NotFound, Store, USER
 from .dispatch import claude_session, courier_online, deliver_here, messenger_listening, remote_claude_session
+from .courier import codex_home, thread_names
 from .turns import (annotate, answered_at, continue_prompts, daily_usage, latest_limits, latest_main_turn, latest_per_pair,
                     link_discussions, project_sessions, project_turns, read_turns, turn_key)
 from . import attention, autocontinue
@@ -311,8 +312,17 @@ def create_app(data_dir=None, dist_dir=None):
         live = None if "Claude" not in pins else (claude_session(pins["Claude"]) if claude_machine is None
                                                   else remote_claude_session(directory, claude_machine, pins["Claude"]))
         primed = store().primed_sessions(pins.values())
+        sessions = project_sessions(directory, pair["project_id"], pairs, memberships)
+        names = thread_names(codex_home()) if any(s["agent"] == "Codex" and s["machine"] is None for s in sessions) else {}
+        for session in sessions:
+            if session["agent"] == "Codex":
+                session["name"] = names.get(session["session_id"]) if session["machine"] is None else None
+            else:
+                details = (claude_session(session["session_id"]) if session["machine"] is None else
+                           remote_claude_session(directory, session["machine"], session["session_id"]))
+                session["name"] = details.get("name") if details else None
         return {"pins": pins, "machines": machines, "state_token": pair["state_token"],
-                "sessions": project_sessions(directory, pair["project_id"], pairs, memberships),
+                "sessions": sessions,
                 "primed": {agent: session in primed for agent, session in pins.items()},
                 "claude_live": live, "messenger_listening": messenger_listening(directory, claude_machine),
                 "couriers": {m: courier_online(directory, m) for m in set(machines.values()) if m}}

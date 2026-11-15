@@ -39,6 +39,11 @@ Open **http://127.0.0.1:8765** in a browser on the board's host.
   selects each agent's main session. Delivery history distinguishes waiting,
   delivered, failed and answered. Duplicate pending sends and rapid repeats to
   the same agent are refused. Only the browser sends; agents have no dispatch tool.
+- **Pair sessions** shows saved local Codex chat names and available Claude
+  session names alongside their IDs. Each selection saves immediately, and the
+  chooser stays open so you can connect both agents. A chat appears after its
+  first completed turn; **Refresh sessions** updates the choices immediately
+  without sending a prompt or changing your draft.
 - **Auto-continue** runs the selected pair for the chosen number of hand-offs,
   within the plan-limit ceiling. **Stop** ends that pair's run. A decision request
   pauses only the requesting pair. See [hand-off design](handoff.md).
