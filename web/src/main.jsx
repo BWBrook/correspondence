@@ -581,7 +581,7 @@ function Board({ route, navigate }) {
                   {t.title}
                 </h3>
                 <p className="thread-meta">
-                  {authorLabel(t.last_author) || "Discussion"} ·{" "}
+                  {authorLabel(t.last_author, t.last_machine) || "Discussion"} ·{" "}
                   <time dateTime={t.updated_at} title={stamp(t.updated_at)}>
                     {shortTime(t.updated_at)}
                   </time>{" "}

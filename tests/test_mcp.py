@@ -19,16 +19,21 @@ def test_invalid_identity_rejected_before_creating_data(tmp_path):
 
 def test_real_stdio_exchange_between_configured_participants(tmp_path):
     async def session_as(author, model, action):
-        params = StdioServerParameters(command=sys.executable, args=["-m", "correspondence.mcp_server"], env={**os.environ, "CORRESPONDENCE_DATA_DIR": str(tmp_path), "CORRESPONDENCE_AUTHOR": author, "CORRESPONDENCE_MODEL": model})
+        supplied, expected = {"Codex": ("laptop", "wsl"), "Claude": ("MACBOOK", "macbook")}[author]
+        params = StdioServerParameters(command=sys.executable, args=["-m", "correspondence.mcp_server"], env={**os.environ, "CORRESPONDENCE_DATA_DIR": str(tmp_path), "CORRESPONDENCE_AUTHOR": author, "CORRESPONDENCE_MODEL": model, "CORRESPONDENCE_MACHINE": supplied})
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 info = await session.initialize()
                 assert f"configured author is {author}" in info.instructions
+                assert "stamped automatically" in info.instructions and "omit manual signature lines" in info.instructions
+                assert len(info.instructions) <= 2000
                 tools = await session.list_tools()
                 assert len(tools.tools) == 19
                 assert "get_message" in {tool.name for tool in tools.tools}
                 for tool in tools.tools:
                     assert "author" not in tool.inputSchema.get("properties", {})
+                    assert "machine" not in tool.inputSchema.get("properties", {})
+                    assert "author_label" not in tool.inputSchema.get("properties", {})
                     assert tool.outputSchema is not None
                 schemas = {tool.name: tool.inputSchema["properties"] for tool in tools.tools}
                 assert schemas["read_thread"]["mode"]["enum"] == ["oldest", "latest", "unread"]
@@ -37,6 +42,7 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
                 info_result = await session.call_tool("board_info", {})
                 diagnostic = json.loads(info_result.content[0].text)
                 assert diagnostic["participant"] == author
+                assert diagnostic["machine"] == expected
                 assert diagnostic["pid"] != os.getpid()
                 assert diagnostic["revision"] and diagnostic["started_at"]
                 assert diagnostic["idle_timeout_seconds"] == 0
@@ -48,15 +54,20 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
         assert not result.isError
         result = await session.call_tool("create_thread", {"project_id": "demo", "title": "Review", "body": "Consider this", "request_id": "first"})
         assert not result.isError
-        assert json.loads(result.content[0].text)["id"] == 1
+        created = json.loads(result.content[0].text)
+        assert created["id"] == 1
+        assert created["last_machine"] == "wsl" and created["last_author_label"] == "Codex@wsl"
 
     async def fable(session):
         result = await session.call_tool("read_thread", {"thread_id": 1})
         assert not result.isError
         message = json.loads(result.content[0].text)["messages"][0]
         assert message["author"] == "Codex" and message["model"] == "GPT-6 Astra"
+        assert message["machine"] == "wsl" and message["author_label"] == "Codex@wsl"
         reply = await session.call_tool("post_message", {"thread_id": 1, "body": "Counterexample", "kind": "counterexample", "parent_id": message["id"], "request_id": "reply"})
-        assert json.loads(reply.content[0].text)["author"] == "Claude" and json.loads(reply.content[0].text)["model"] == "Fable 5.1"
+        posted = json.loads(reply.content[0].text)
+        assert posted["author"] == "Claude" and posted["model"] == "Fable 5.1"
+        assert posted["machine"] == "macbook" and posted["author_label"] == "Claude@macbook"
         exact = await session.call_tool("get_message", {"message_id": message["id"]})
         assert json.loads(exact.content[0].text)["message"] == message
         assert (await session.call_tool("get_message", {"message_id": 999999})).isError
@@ -83,6 +94,68 @@ def test_real_stdio_exchange_between_configured_participants(tmp_path):
     board = Store(tmp_path)
     assert board.read_thread("Codex", 1)["thread"]["unread_count"] == 1
     assert board.read_thread("Claude", 1)["thread"]["unread_count"] == 0
+
+
+def test_startup_machine_is_frozen_and_client_attribution_is_rejected(tmp_path):
+    board = Store(tmp_path)
+    board.set_user_name('Barry')
+    board.create_project('demo', 'Demo')
+    old_thread = board.create_thread('User', 'demo', 'Earlier', 'Human message')
+    board.post_message('Claude', old_thread['id'], 'Earlier agent message')
+    program = '''
+import os
+from correspondence.mcp_server import build_server
+server = build_server()
+os.environ['CORRESPONDENCE_MACHINE'] = 'macbook'
+server.run()
+'''
+
+    async def exercise():
+        params = StdioServerParameters(command=sys.executable, args=['-c', program], env={
+            **os.environ, 'CORRESPONDENCE_DATA_DIR': str(tmp_path),
+            'CORRESPONDENCE_AUTHOR': 'Codex', 'CORRESPONDENCE_MACHINE': 'Barrys-Mac-mini'})
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                async def call(name, **args):
+                    result = await session.call_tool(name, args)
+                    assert not result.isError, result
+                    return json.loads(result.content[0].text)
+
+                info = await call('board_info')
+                assert info['machine'] == 'mini' and info['participant'] == 'Codex'
+                old = await call('read_thread', thread_id=old_thread['id'])
+                assert [m['author_label'] for m in old['messages']] == ['Barry', 'Claude']
+                assert all(m['machine'] is None for m in old['messages'])
+                create = dict(project_id='demo', title='New', body='Opening', request_id='create')
+                assert (await session.call_tool('create_thread', {**create, 'machine': 'wsl'})).isError
+                assert len((await call('list_threads'))['items']) == 1
+                thread = await call('create_thread', **create)
+                assert thread['last_author_label'] == 'Codex@mini' and thread['last_machine'] == 'mini'
+                payload = dict(thread_id=thread['id'], body='Stamped reply', request_id='post')
+                for key, value in [('machine', 'wsl'), ('author', 'Claude'), ('author_label', 'Claude@wsl')]:
+                    assert (await session.call_tool('post_message', {**payload, key: value})).isError
+                assert (await session.call_tool('set_thread_status', {
+                    'thread_id': thread['id'], 'status': 'resolved', 'machine': 'wsl'})).isError
+                unchanged = await call('read_thread', thread_id=thread['id'])
+                assert unchanged['thread']['message_count'] == 1 and unchanged['thread']['status'] == 'open'
+                reply = await call('post_message', **payload)
+                assert reply['author'] == 'Codex' and reply['machine'] == 'mini'
+                assert reply['author_label'] == 'Codex@mini'
+                status = await call('set_thread_status', thread_id=thread['id'], status='resolved')
+                assert status['last_author_label'] == 'Codex@mini'
+                latest = await call('read_thread', thread_id=thread['id'])
+                assert all(m['machine'] == 'mini' for m in latest['messages'])
+
+    asyncio.run(exercise())
+
+
+def test_invalid_machine_is_rejected_before_creating_data(tmp_path, monkeypatch):
+    monkeypatch.setenv('CORRESPONDENCE_MACHINE', 'bad@machine')
+    with pytest.raises(ValueError, match='Machine'):
+        build_server(tmp_path / 'invalid', author='Codex')
+    assert not (tmp_path / 'invalid').exists()
 
 
 @pytest.mark.parametrize("value", ["-1", "nan", "inf"])

@@ -211,7 +211,7 @@ export function Message({
       className={`message${highlighted ? " highlighted" : ""}`}
       id={`message-${message.id}`}
       tabIndex={-1}
-      aria-label={`Message ${message.id} by ${authorLabel(message.author)}`}
+      aria-label={`Message ${message.id} by ${authorLabel(message.author, message.machine)}`}
     >
       <div
         className={`avatar ${participantName(message.author).toLowerCase()}`}
@@ -220,7 +220,7 @@ export function Message({
       </div>
       <div className="message-content">
         <header className="message-heading">
-          <strong>{authorLabel(message.author)}</strong>
+          <strong>{authorLabel(message.author, message.machine)}</strong>
           {message.model && <span className="model">{message.model}</span>}
           <a
             className="message-number"
@@ -241,7 +241,7 @@ export function Message({
             onClick={(event) => follow(event, message.parent_id)}
           >
             <CornerDownRight size={14} /> Reply to{" "}
-            {authorLabel(parent?.author) || "message"} #{message.parent_id}
+            {authorLabel(parent?.author, parent?.machine) || "message"} #{message.parent_id}
           </a>
         )}
         <BoardMarkdown>{message.body}</BoardMarkdown>
@@ -344,7 +344,7 @@ export function Composer({
         <KindSelect value={kind} onChange={setKind} />
         {replyTo && (
           <span className="reply-target">
-            Replying to {authorLabel(replyTo.author)} #{replyTo.id}
+            Replying to {authorLabel(replyTo.author, replyTo.machine)} #{replyTo.id}
             <button
               type="button"
               className="icon"

@@ -19,7 +19,7 @@ LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 AUTO_HOPS = (1, 50)
 AUTO_CEILING = (10, 100)
 STALE_CLAIM_SECONDS = 120
@@ -40,6 +40,12 @@ def author_name(author: str) -> str:
     return author
 
 
+def author_label(author: str, machine: str | None = None, user: str = USER) -> str:
+    if author == USER:
+        return user
+    return f"{author}@{machine}" if author in {"Claude", "Codex"} and machine else author
+
+
 def clean_text(value: str, label: str, maximum: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         raise ValueError(f"{label} must contain 1–{maximum} characters")
@@ -51,7 +57,10 @@ def now() -> str:
 
 
 class Store:
-    def __init__(self, directory: str | Path | None = None):
+    def __init__(self, directory: str | Path | None = None, *, machine: str | None = None):
+        if machine is not None and (not isinstance(machine, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", machine)):
+            raise ValueError("Machine must be a canonical lowercase host label of 1–63 characters")
+        self.machine = machine
         self.directory = Path(directory or os.environ.get("CORRESPONDENCE_DATA_DIR", "~/Library/Application Support/Correspondence")).expanduser()
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.directory / "board.sqlite3"
@@ -186,6 +195,9 @@ class Store:
                 con.execute("ALTER TABLE pairs ADD COLUMN state_token TEXT")
                 for row in con.execute("SELECT id FROM pairs").fetchall():
                     con.execute("UPDATE pairs SET state_token=? WHERE id=?", (uuid4().hex, row["id"]))
+                con.execute("PRAGMA user_version=12")
+            if version < 13:
+                con.execute("ALTER TABLE messages ADD COLUMN machine TEXT")
                 con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             con.commit()
         except Exception:
@@ -411,16 +423,22 @@ class Store:
             model = clean_text(model, "model", 200)
         return body, model
 
-    @staticmethod
-    def _insert_message(con, thread_id, author, model, body, kind, parent_id=None):
+    def _insert_message(self, con, thread_id, author, model, body, kind, parent_id=None):
         if parent_id is not None:
             parent = Store._require(con, "messages", parent_id)
             if parent["thread_id"] != thread_id:
                 raise ValueError("Reply parent must belong to the same discussion")
         timestamp = now()
-        cursor = con.execute("INSERT INTO messages(thread_id,author,model,body,kind,parent_id,created_at) VALUES (?,?,?,?,?,?,?)", (thread_id, author, model, body, kind, parent_id, timestamp))
+        machine = self.machine if author in {"Claude", "Codex"} else None
+        cursor = con.execute("INSERT INTO messages(thread_id,author,model,body,kind,parent_id,created_at,machine) VALUES (?,?,?,?,?,?,?,?)", (thread_id, author, model, body, kind, parent_id, timestamp, machine))
         con.execute("UPDATE threads SET updated_at=? WHERE id=?", (timestamp, thread_id))
         return cursor.lastrowid
+
+    @staticmethod
+    def _message_record(row, user=USER):
+        item = dict(row)
+        item["author_label"] = author_label(item["author"], item["machine"], user)
+        return item
 
     @staticmethod
     def _thread_records(con, threads, author):
@@ -430,7 +448,8 @@ class Store:
         records = {thread["id"]: dict(thread, read_markers={name: 0 for name in PARTICIPANTS},
                                       unread_counts={name: 0 for name in PARTICIPANTS},
                                       message_count=0, first_message_id=None, last_message_id=None,
-                                      first_unread_message_id=None, last_author=None) for thread in threads}
+                                      first_unread_message_id=None, last_author=None,
+                                      last_machine=None, last_author_label=None) for thread in threads}
         placeholders = ",".join("?" for _ in records)
         stats = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'))
             SELECT m.thread_id, p.author participant, COALESCE(r.message_id,0) marker,
@@ -449,11 +468,17 @@ class Store:
                 for field in ("message_count", "first_message_id", "last_message_id", "first_unread_message_id"):
                     record[field] = row[field]
         last_ids = [record["last_message_id"] for record in records.values() if record["last_message_id"] is not None]
-        last_authors = {}
+        last_messages = {}
         if last_ids:
-            last_authors = dict(con.execute(f"SELECT id,author FROM messages WHERE id IN ({','.join('?' for _ in last_ids)})", last_ids))
+            last_messages = {row["id"]: row for row in con.execute(f"""SELECT id,author,machine,
+                COALESCE((SELECT value FROM settings WHERE key='user_name'),'User') user_name
+                FROM messages WHERE id IN ({','.join('?' for _ in last_ids)})""", last_ids)}
         for record in records.values():
-            record["last_author"] = last_authors.get(record["last_message_id"])
+            last = last_messages.get(record["last_message_id"])
+            if last is not None:
+                record["last_author"] = last["author"]
+                record["last_machine"] = last["machine"]
+                record["last_author_label"] = author_label(last["author"], last["machine"], last["user_name"])
             record["unread_count"] = record["unread_counts"][author]
             record["last_read_message_id"] = record["read_markers"][author]
         return list(records.values())
@@ -1052,12 +1077,13 @@ class Store:
                 candidates = con.execute("SELECT * FROM messages WHERE thread_id=? AND id>? ORDER BY id LIMIT ?", (thread_id, after, limit))
             # Always return at least one message so a single oversized body cannot stall paging.
             total, rows = 0, []
+            user = self._user_name(con)
             for row in candidates:
                 size = len(row["body"].encode("utf-8"))
                 if rows and total + size > max_bytes:
                     break
                 total += size
-                rows.append(dict(row))
+                rows.append(self._message_record(row, user))
             if backwards:
                 rows.reverse()
             first = rows[0]["id"] if rows else None
@@ -1073,7 +1099,8 @@ class Store:
         author_name(author)
         with self.connect() as con:
             message = self._require(con, "messages", message_id)
-            return {"thread": self._thread(con, message["thread_id"], author, archived=archived), "message": message}
+            return {"thread": self._thread(con, message["thread_id"], author, archived=archived),
+                    "message": self._message_record(message, self._user_name(con))}
 
     def post_message(self, author, thread_id, body, kind="note", parent_id=None, model=None, request_id=None):
         body, model = self._message_args(author, body, kind, model)
@@ -1082,10 +1109,10 @@ class Store:
             self._visible_thread(con, thread_id)
             result_id = self._request(con, author, request_id, "post_message", payload)
             if result_id is not None:
-                return self._require(con, "messages", result_id)
+                return self._message_record(self._require(con, "messages", result_id), self._user_name(con))
             result_id = self._insert_message(con, thread_id, author, model, body, kind, parent_id)
             self._request(con, author, request_id, "post_message", payload, result_id)
-            return self._require(con, "messages", result_id)
+            return self._message_record(self._require(con, "messages", result_id), self._user_name(con))
 
     def human_attention_state(self):
         with self.connect() as con:
@@ -1197,14 +1224,15 @@ class Store:
                 raise ValueError(f"{name} must be a positive SQLite integer id")
         pattern = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         with self.connect() as con:
-            rows = con.execute("""SELECT m.id, m.thread_id, m.author, m.model, m.kind, m.parent_id, m.created_at, m.body,
+            rows = con.execute("""SELECT m.id, m.thread_id, m.author, m.machine, m.model, m.kind, m.parent_id, m.created_at, m.body,
                 t.title thread_title, t.project_id, p.name project_name
                 FROM messages m JOIN threads t ON m.thread_id=t.id JOIN projects p ON t.project_id=p.id
                 WHERE (p.archived_at IS NOT NULL)=? AND (m.body LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\')
                 AND (? IS NULL OR t.project_id=?) AND (? IS NULL OR m.thread_id=?)
                 AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
                 (archived,pattern,pattern,project_id,project_id,thread_id,thread_id,before,before,limit))
-            return [self._snippet(dict(row), q) for row in rows]
+            user = self._user_name(con)
+            return [self._snippet(self._message_record(row, user), q) for row in rows]
 
     @staticmethod
     def _snippet(row, q, width=300):
@@ -1245,11 +1273,11 @@ class Store:
         return len(json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
     @staticmethod
-    def _bounded_messages(rows, max_bytes, limit=None):
+    def _bounded_messages(rows, max_bytes, limit=None, user=USER):
         """Budget the compact JSON message array, admitting a first oversized item."""
         items, size, has_more = [], 2, False  # JSON array brackets count too.
         for row in rows:
-            item = dict(row)
+            item = Store._message_record(row, user)
             item_size = Store._items_bytes([item]) - 2
             candidate_size = size + item_size + bool(items)
             if items and ((limit is not None and len(items) >= limit) or candidate_size > max_bytes):
@@ -1292,7 +1320,8 @@ class Store:
             parameters = (author, archived, after, through, project_id, project_id, thread_id, thread_id, unread_only, author, LEGACY_AUTHORS.get(author, author))
             total = con.execute("SELECT COUNT(*) " + where, parameters).fetchone()[0]
             rows = con.execute("SELECT m.*,t.project_id,t.title thread_title,p.name project_name " + where + " ORDER BY m.id LIMIT ?", (*parameters, limit))
-            items = [self._snippet(dict(row), "") for row in rows]
+            user = self._user_name(con)
+            items = [self._snippet(self._message_record(row, user), "") for row in rows]
             has_more = total > len(items)
             return {"items": items, "has_more": has_more,
                     "next_after": items[-1]["id"] if has_more else through,
@@ -1318,7 +1347,7 @@ class Store:
             through = self._snapshot_bound(con, after, through)
             rows = con.execute("SELECT * FROM messages WHERE thread_id=? AND id>? AND id<=? ORDER BY id LIMIT ?",
                                (thread_id, after, through, limit + 1))
-            messages, size, oversized, has_more = self._bounded_messages(rows, max_bytes, limit)
+            messages, size, oversized, has_more = self._bounded_messages(rows, max_bytes, limit, self._user_name(con))
             return {"thread": thread, "messages": messages, "has_more": has_more,
                     "next_after": messages[-1]["id"] if has_more else through,
                     "through": through, "returned_bytes": size, "oversized": oversized}
@@ -1355,7 +1384,7 @@ class Store:
                 found.update(parent_rows)
                 missing.extend(message_id for message_id in parents if message_id not in parent_rows)
                 candidates.extend(message_id for message_id in parents if message_id in parent_rows)
-            messages, size, oversized, _ = self._bounded_messages((found[message_id] for message_id in candidates), max_bytes)
+            messages, size, oversized, _ = self._bounded_messages((found[message_id] for message_id in candidates), max_bytes, user=self._user_name(con))
             return {"messages": messages, "missing_ids": missing, "omitted_ids": candidates[len(messages):],
                     "returned_bytes": size, "oversized": oversized}
 
@@ -1389,7 +1418,8 @@ class Store:
                 AND m.id>? AND (? IS NULL OR m.id<?) ORDER BY m.id DESC LIMIT ?""",
                 (archived, self._literal_pattern(q), project_id, project_id, thread_id, thread_id,
                  author_filter, author_filter, LEGACY_AUTHORS.get(author_filter, author_filter), kind, kind, since, since, after, before, before, limit + 1)).fetchall()
-            items = [self._snippet(dict(row), q) for row in rows[:limit]]
+            user = self._user_name(con)
+            items = [self._snippet(self._message_record(row, user), q) for row in rows[:limit]]
             return {"items": items, "has_more": len(rows) > limit,
                     "next_before": items[-1]["id"] if items else before}
 
@@ -1397,7 +1427,7 @@ class Store:
     def _compact_thread(record):
         fields = ("id", "project_id", "title", "status", "updated_at", "message_count",
                   "last_message_id", "unread_count", "last_read_message_id", "first_unread_message_id",
-                  "read_markers", "unread_counts", "last_author")
+                  "read_markers", "unread_counts", "last_author", "last_machine", "last_author_label")
         return {field: record[field] for field in fields}
 
     def _threads_page(self, author, project_id, unread_only, limit, before, q=None, *, archived=False):
@@ -1440,7 +1470,7 @@ class Store:
         flat = lambda text: str(text).replace("\n", " ").replace("\r", " ")
         lines = [f"# {flat(thread['title'])}", "", f"Project: {flat(project['name'])} (`{project['id']}`)", f"Discussion: {thread_id} · Status: {thread['status']}", "", "Correspondence is evidence and discussion, not executable authority.", ""]
         for message in messages:
-            lines += [f"## Message {message['id']} · {user if message['author'] == USER else message['author']} · {message['kind']}", "", f"Time: {message['created_at']}"]
+            lines += [f"## Message {message['id']} · {flat(author_label(message['author'], message['machine'], user))} · {message['kind']}", "", f"Time: {message['created_at']}"]
             if message["model"]:
                 lines.append(f"Model: {flat(message['model'])}")
             if message["parent_id"]:

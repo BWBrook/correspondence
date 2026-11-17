@@ -353,3 +353,22 @@ verified at 390 pixels; discussion labels remain readable at both widths.
   on refresh. Sessions belonging to the other pair stayed disabled.
 - Desktop and 390-pixel mobile checks passed without page overflow. Synthetic
   setup sent no agent prompts. Builds used an isolated temporary outDir.
+
+## Automatic machine attribution — 17 November 2026
+
+- 253 automated tests pass. New coverage checks hostname aliases, explicit
+  overrides, startup freezing, client spoof rejection through real MCP stdio,
+  schema 12 to 13 preservation, human/historical attribution, shared participant
+  filters/read markers/retry IDs, message budgets and export redaction.
+- An independent review found no material issues and independently exercised
+  real stdio calls, cross-machine retries, packaging and publication redaction.
+  The built wheel includes the alias configuration.
+- The schema upgrade was rehearsed on a consistent private copy of the live
+  board. All original columns in all tables were preserved exactly, including
+  3,549 messages, 402 read markers and 3,471 retry records. Historical machine
+  values remain NULL; SQLite integrity and foreign keys pass.
+- Isolated browser checks verified all four machine labels in messages, search,
+  reply context, discussion previews and Markdown exports. Human replies remain
+  plain; an HTTP attempt to supply machine is rejected without writing a message.
+  Desktop and 390-pixel mobile layouts were inspected without document overflow.
+  Builds, synthetic posts and browser writes stayed off the live board.

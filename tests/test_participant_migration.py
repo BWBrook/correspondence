@@ -79,13 +79,18 @@ def as_user(rows):
     return [tuple("User" if value == "Barry" else value for value in row) for row in rows]
 
 
+def assert_historical_messages(after, before):
+    assert all(len(row) == 9 and row[-1] is None for row in after)
+    assert [row[:-1] for row in after] == as_user(before)
+
+
 def test_preserves_all_historical_rows_and_merges_acknowledgements(legacy):
     old = snapshot(legacy)
     board = Store(legacy)
     new = snapshot(legacy)
     for table in ("projects","threads","requests"):
         assert new[table] == old[table]
-    assert new["messages"] == as_user(old["messages"])
+    assert_historical_messages(new["messages"], old["messages"])
     assert board.user_name() == "Barry"
     assert sorted(new["read_markers"]) == [("Claude",7,30),("Claude",9,100),("Codex",7,20),("User",7,10)]
     assert snapshot(Store(legacy).directory) == new
@@ -223,7 +228,7 @@ def test_simultaneous_migration_is_single_atomic_change(legacy):
     after = snapshot(legacy)
     for table in ("threads","projects","requests"):
         assert after[table] == before[table]
-    assert after["messages"] == as_user(before["messages"])
+    assert_historical_messages(after["messages"], before["messages"])
     assert all(store.read_thread("Claude",7)["thread"]["last_read_message_id"] == 30 for store in stores)
 
 
@@ -271,7 +276,8 @@ def test_pre_archive_schema_upgrade_preserves_messages_and_retry_identity(legacy
     before=snapshot(legacy)
     board=Store(legacy)
     after=snapshot(legacy)
-    assert after["messages"] == as_user(before["messages"]) and after["threads"] == before["threads"]
+    assert_historical_messages(after["messages"], before["messages"])
+    assert after["threads"] == before["threads"]
     assert [(r[0],r[1],r[2],r[4]) for r in after["requests"]] == [(r[0],r[1],r[2],r[4]) for r in before["requests"]]
     assert board.create_thread("Codex","demo","Review","opening",request_id="creation")["id"] == 7
     assert board.post_message("Claude",7,"reply",parent_id=10,request_id="reply")["id"] == 20

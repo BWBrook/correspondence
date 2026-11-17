@@ -27,3 +27,34 @@ def test_withheld_message_is_replaced_and_redactions_apply(tmp_path):
     assert problems == []
     assert "password detail" not in text and "Withheld from the public record: access detail." in text
     assert "~/x on [address] via [host]" in text
+
+
+def test_machine_attribution_is_part_of_author_and_obeys_host_redaction(tmp_path):
+    path = tmp_path / 'machines.toml'
+    path.write_text('project = "p"\nredact = [["\\\\bmacbook\\\\b", "[host]"]]\n')
+    rules = load_policy(path)
+    msgs = [
+        message(1, 'From the laptop.'),
+        {**message(2, 'From WSL.'), 'author': 'Codex', 'machine': 'wsl'},
+        {**message(3, 'From mini.'), 'machine': 'mini'},
+        {**message(4, 'From alien.'), 'author': 'Codex', 'machine': 'alien'},
+        message(5, 'Historical message.'),
+        {**message(6, 'Human response.'), 'author': 'User', 'machine': 'mini'},
+    ]
+    msgs[0]['machine'] = 'macbook'
+    text, problems = render(THREAD, msgs, rules, user='Barry')
+    assert not problems
+    assert 'Message 1 · Claude@[host]' in text and 'macbook' not in text
+    assert 'Message 2 · Codex@wsl' in text
+    assert 'Message 3 · Claude@mini' in text
+    assert 'Message 4 · Codex@alien' in text
+    assert 'Message 5 · Claude ·' in text
+    assert 'Message 6 · Barry ·' in text and 'Barry@' not in text
+
+
+def test_withheld_machine_header_still_redacts_the_hostname(tmp_path):
+    path = tmp_path / 'withheld.toml'
+    path.write_text('project = "p"\nredact = [["macbook", "[host]"]]\n[withheld]\n1 = "private"\n')
+    text, problems = render(THREAD, [{**message(1, 'private body'), 'machine': 'macbook'}], load_policy(path))
+    assert not problems and 'private body' not in text
+    assert 'Claude@[host]' in text and 'macbook' not in text

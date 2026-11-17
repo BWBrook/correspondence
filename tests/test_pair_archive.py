@@ -236,6 +236,7 @@ def test_schema11_upgrade_preserves_every_existing_column_and_foreign_key(tmp_pa
         store.start_auto(pair, 4, 80)
         store.create_dispatch(pair, 'Claude', f'Prompt {pair}')
     with sqlite3.connect(store.path) as con:
+        con.execute('ALTER TABLE messages DROP COLUMN machine')
         con.execute('ALTER TABLE pairs DROP COLUMN archived_at')
         con.execute('ALTER TABLE pairs DROP COLUMN state_token')
         con.execute('PRAGMA user_version=11')
@@ -247,7 +248,8 @@ def test_schema11_upgrade_preserves_every_existing_column_and_foreign_key(tmp_pa
         for table in tables:
             names = ','.join(columns[table])
             assert con.execute(f'SELECT {names} FROM {table} ORDER BY rowid').fetchall() == before[table]
-        assert con.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION == 12
+        assert con.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION == 13
+        assert all(r[0] is None for r in con.execute('SELECT machine FROM messages'))
         assert con.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
         assert con.execute('PRAGMA foreign_key_check').fetchall() == []
     pairs = upgraded.pairs('earth')

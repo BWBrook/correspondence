@@ -163,7 +163,7 @@ export function SearchDialog({
               <span className="search-project">{message.project_name}</span>
               <h3>{message.thread_title}</h3>
               <p>
-                {authorLabel(message.author)} · {titleCase(message.kind)} · #
+                {authorLabel(message.author, message.machine)} · {titleCase(message.kind)} · #
                 {message.id} · {stamp(message.created_at)}
               </p>
               <div>{message.snippet}</div>

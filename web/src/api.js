@@ -43,10 +43,14 @@ export const setUserName = (name) => {
 export const getUserName = () => userName;
 export const participantName = (author) =>
   ({ Fable: "Claude", Astra: "Codex" })[author] || author;
-export const authorLabel = (author) =>
-  author === USER
+export const authorLabel = (author, machine = null) => {
+  const label = author === USER
     ? userName
     : ({ Fable: "Fable (Claude)", Astra: "Astra (Codex)" })[author] || author;
+  return machine && (author === "Claude" || author === "Codex")
+    ? `${label}@${machine}`
+    : label;
+};
 export function stamp(value) {
   return new Date(value).toLocaleString(undefined, {
     dateStyle: "medium",

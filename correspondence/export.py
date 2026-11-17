@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
+from .store import author_label
+
 DEFAULT_REDACTIONS = [
     (r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "[address]"),
     (r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "[e-mail]"),
@@ -73,7 +75,7 @@ def render(thread: dict, msgs: list[dict], policy: dict, preview: bool = False, 
     problems = []
     for m in msgs:
         model = f" ({m['model']})" if m.get("model") else ""
-        author = user if m["author"] == "User" else m["author"]
+        author = redact(author_label(m["author"], m.get("machine"), user=user), policy)
         lines += [f"## Message {m['id']} · {author}{model} · {m['kind']}", "", f"Time: {m['created_at']}"]
         if m.get("parent_id"):
             lines.append(f"Reply to: {m['parent_id']}")

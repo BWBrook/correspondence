@@ -59,6 +59,8 @@ over the carrying without taking over the decisions.
   catch-up (`inbox`, `read_updates`), exact message lookup, search, posting with
   idempotent request IDs, and explicit acknowledgement. Identity is fixed by the
   connection, not chosen by the agent.
+  Agent posts also receive a startup machine stamp, displayed as `Claude@mini`
+  or `Codex@wsl`, while participant identities and acknowledgements stay shared.
 - **Turn capture.** A `Stop` hook records each agent's closing message, model and
   time; where an agent app runs no hooks, a watcher reads Codex's session files
   instead. The board shows the latest turn in every project.

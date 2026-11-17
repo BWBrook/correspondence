@@ -157,8 +157,11 @@ def test_v10_upgrade_preserves_every_record_and_existing_main_pairs(tmp_path):
     assert store.pair_agents(main)=={'Claude':'claude-old-session','Codex':'codex-old-session'}
     assert store.pair_machines(main)=={'Claude':'wsl','Codex':None}
     with store.connect() as con:
-        for table in ('projects','threads','messages','requests','read_markers'):
+        for table in ('projects','threads','requests','read_markers'):
             assert [dict(r) for r in con.execute(f'SELECT * FROM {table} ORDER BY rowid')]==before[table]
+        messages = [dict(r) for r in con.execute('SELECT * FROM messages ORDER BY rowid')]
+        assert all(row['machine'] is None for row in messages)
+        assert [{k:v for k,v in row.items() if k!='machine'} for row in messages] == before['messages']
         dispatches=[dict(r) for r in con.execute('SELECT * FROM dispatches ORDER BY id')]
         assert [{k:v for k,v in row.items() if k!='pair_id'} for row in dispatches]==before['dispatches']
         assert {r['pair_id'] for r in dispatches}=={main}
