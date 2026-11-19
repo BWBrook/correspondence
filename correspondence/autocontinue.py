@@ -85,6 +85,8 @@ def advance(store, run: dict, history: list[dict], pins: dict, user: str, limits
         return stop(f"{latest['agent']} handed this to you" + (f": {reason}" if reason else ""))
     if declared == latest["agent"]:
         return stop(f"{latest['agent']} asked to continue its own work")
+    if declared not in project_pins:
+        return stop(f"{latest['agent']} handed this to {declared}, which the board cannot prompt")
     if run["hops_left"] <= 0:
         return stop("The hand-offs set for this run are used up")
     primed = bool(store.primed_sessions([project_pins[declared]]))

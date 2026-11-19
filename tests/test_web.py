@@ -151,12 +151,12 @@ def test_mark_all_read_http_identity_payload_and_origin(client):
     assert client.post("/api/read-all", json={"author": "Claude"}, headers=HEADERS).status_code == 422
     assert client.post("/api/read-all", json={"thread_id": thread_id}, headers=HEADERS).status_code == 422
     assert client.post("/api/read-all", headers={**HEADERS, "Content-Type": "application/json"}).status_code == 422
-    assert board.read_thread("User", thread_id)["thread"]["read_markers"] == {"User": 0, "Codex": 0, "Claude": 0}
+    assert board.read_thread("User", thread_id)["thread"]["read_markers"] == {"User": 0, "Codex": 0, "Claude": 0, "Gemini": 0}
     response = client.post("/api/read-all", json={}, headers=HEADERS)
     assert response.status_code == 200
     assert response.json() == {"threads_marked": 1, "messages_marked": 1}
     metadata = board.read_thread("User", thread_id)["thread"]
-    assert metadata["read_markers"] == {"User": metadata["last_message_id"], "Codex": 0, "Claude": 0}
+    assert metadata["read_markers"] == {"User": metadata["last_message_id"], "Codex": 0, "Claude": 0, "Gemini": 0}
     assert client.post("/api/read-all", json={}, headers=HEADERS).json() == {"threads_marked": 0, "messages_marked": 0}
 
 

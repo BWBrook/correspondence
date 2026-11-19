@@ -47,7 +47,7 @@ export const authorLabel = (author, machine = null) => {
   const label = author === USER
     ? userName
     : ({ Fable: "Fable (Claude)", Astra: "Astra (Codex)" })[author] || author;
-  return machine && (author === "Claude" || author === "Codex")
+  return machine && ["Claude", "Codex", "Gemini"].includes(author)
     ? `${label}@${machine}`
     : label;
 };

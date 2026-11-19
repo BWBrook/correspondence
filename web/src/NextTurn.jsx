@@ -238,7 +238,9 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
     ? AGENTS.find((agent) => agent !== lastTurn.agent)
     : null;
   const declared = lastTurn?.next?.agent;
-  const suggested = declared === "User" ? null : declared || other;
+  // The board prompts only the pair's two agents; a turn handed to anyone else is shown, not sent.
+  const elsewhere = declared && declared !== "User" && !AGENTS.includes(declared);
+  const suggested = declared === "User" || elsewhere ? null : declared || other;
   const recipient = suggested || other;
   const defaultText = continuePrompt(
     lastTurn,
@@ -357,6 +359,13 @@ export function NextTurn({ pairId, pairName, expectedState, lastTurn, onPinsChan
         <p className="your-call" role="status">
           {lastTurn.agent} handed the next turn to you
           {lastTurn.next.reason ? ` (${lastTurn.next.reason})` : ""}.
+        </p>
+      )}
+      {elsewhere && (
+        <p className="your-call" role="status">
+          {lastTurn.agent} handed the next turn to {declared}
+          {lastTurn.next.reason ? ` (${lastTurn.next.reason})` : ""}. The board
+          cannot prompt {declared}; continue in its own session.
         </p>
       )}
       <textarea

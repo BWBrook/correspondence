@@ -248,7 +248,7 @@ def test_schema11_upgrade_preserves_every_existing_column_and_foreign_key(tmp_pa
         for table in tables:
             names = ','.join(columns[table])
             assert con.execute(f'SELECT {names} FROM {table} ORDER BY rowid').fetchall() == before[table]
-        assert con.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION == 13
+        assert con.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
         assert all(r[0] is None for r in con.execute('SELECT machine FROM messages'))
         assert con.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
         assert con.execute('PRAGMA foreign_key_check').fetchall() == []

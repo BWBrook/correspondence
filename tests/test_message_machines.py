@@ -29,7 +29,7 @@ def test_schema_12_upgrade_preserves_every_original_column_and_leaves_old_machin
             snapshots[table] = columns, rows(con, table, columns)
     after = Store(tmp_path, machine='mini')
     with sqlite3.connect(after.path) as con:
-        assert con.execute('PRAGMA user_version').fetchone()[0] == 13
+        assert con.execute('PRAGMA user_version').fetchone()[0] == 14
         assert con.execute('SELECT machine FROM messages').fetchall() == [(None,), (None,)]
         for table, (columns, original) in snapshots.items():
             assert rows(con, table, columns) == original

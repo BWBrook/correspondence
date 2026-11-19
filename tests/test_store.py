@@ -278,8 +278,8 @@ def test_all_participant_acknowledgements_across_projects(board):
     board.mark_read("Codex", first, fable_post["id"])
     second_opening = board.read_thread("Claude", second)["thread"]["first_message_id"]
     board.mark_read("Claude", second, second_opening)
-    expected_markers = {"User": barry_post["id"], "Codex": fable_post["id"], "Claude": 0}
-    expected_counts = {"User": 2, "Codex": 0, "Claude": 3}
+    expected_markers = {"User": barry_post["id"], "Codex": fable_post["id"], "Claude": 0, "Gemini": 0}
+    expected_counts = {"User": 2, "Codex": 0, "Claude": 3, "Gemini": 4}
     for participant in ("User", "Codex", "Claude"):
         metadata = board.read_thread(participant, first, mode="latest")["thread"]
         assert metadata["read_markers"] == expected_markers
@@ -291,11 +291,11 @@ def test_all_participant_acknowledgements_across_projects(board):
         listed = dict(threads[first])
         assert listed.pop("last_excerpt") == "Astra latest"
         assert listed == metadata
-        assert threads[second]["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 1}
+        assert threads[second]["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 1, "Gemini": 2}
         projects = {row["id"]: row for row in board.list_projects(participant)}
-        assert projects["demo"]["unread_counts"] == {"User": 4, "Codex": 1, "Claude": 4}
-        assert projects["other"]["unread_counts"] == {"User": 1, "Codex": 1, "Claude": 2}
-        assert projects["empty"]["unread_counts"] == {"User": 0, "Codex": 0, "Claude": 0}
+        assert projects["demo"]["unread_counts"] == {"User": 4, "Codex": 1, "Claude": 4, "Gemini": 6}
+        assert projects["other"]["unread_counts"] == {"User": 1, "Codex": 1, "Claude": 2, "Gemini": 2}
+        assert projects["empty"]["unread_counts"] == {"User": 0, "Codex": 0, "Claude": 0, "Gemini": 0}
         assert projects["demo"]["unread_count"] == projects["demo"]["unread_counts"][participant]
         board.search_messages(participant, "reply")
         board.export_thread(participant, first)
@@ -322,12 +322,12 @@ def test_acknowledgement_maps_share_message_snapshot(board, monkeypatch):
     monkeypatch.setattr(board, "_thread", change_after_metadata)
     page = board.read_thread("User", first)
     assert len(page["messages"]) == 2
-    assert page["thread"]["read_markers"] == {"User": 0, "Codex": 0, "Claude": 0}
-    assert page["thread"]["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 1}
+    assert page["thread"]["read_markers"] == {"User": 0, "Codex": 0, "Claude": 0, "Gemini": 0}
+    assert page["thread"]["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 1, "Gemini": 2}
     monkeypatch.setattr(board, "_thread", original)
     fresh = board.read_thread("User", first)["thread"]
-    assert fresh["read_markers"] == {"User": 0, "Codex": last["id"], "Claude": 0}
-    assert fresh["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 2}
+    assert fresh["read_markers"] == {"User": 0, "Codex": last["id"], "Claude": 0, "Gemini": 0}
+    assert fresh["unread_counts"] == {"User": 2, "Codex": 1, "Claude": 2, "Gemini": 3}
 
 
 def test_participant_metadata_queries_are_batched(board, monkeypatch):
@@ -346,9 +346,9 @@ def test_participant_metadata_queries_are_batched(board, monkeypatch):
     monkeypatch.setattr(board, "connect", traced_connect)
     threads = board.list_threads("Claude")
     assert len(threads) == 25 and len(reads) <= 4
-    assert all(row["unread_counts"] == {"User": 1, "Codex": 0, "Claude": 1} for row in threads)
+    assert all(row["unread_counts"] == {"User": 1, "Codex": 0, "Claude": 1, "Gemini": 1} for row in threads)
     reads.clear()
-    assert board.list_projects("Claude")[0]["unread_counts"] == {"User": 25, "Codex": 0, "Claude": 25}
+    assert board.list_projects("Claude")[0]["unread_counts"] == {"User": 25, "Codex": 0, "Claude": 25, "Gemini": 25}
     assert len(reads) <= 3
 
 

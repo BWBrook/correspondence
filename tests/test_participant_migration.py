@@ -123,7 +123,7 @@ def test_alias_own_post_rules_on_all_count_and_unread_surfaces(legacy, participa
     assert {t["id"] for t in board.list_threads_page(participant,unread_only=True)["items"]} == expected_threads
     assert board.list_projects(participant)[0]["unread_count"] == len(unread)
     for t in board.search_threads(participant,"Review")["items"] + board.list_threads(participant):
-        assert set(t["read_markers"]) == set(t["unread_counts"]) == {"User","Claude","Codex"}
+        assert set(t["read_markers"]) == set(t["unread_counts"]) == {"User","Claude","Codex","Gemini"}
         assert t["unread_count"] == sum(m["thread_id"] == t["id"] for m in unread)
     metadata = board.get_message(participant,10)["thread"]
     expected_first = next((m["id"] for m in unread if m["thread_id"] == 7),None)
@@ -247,10 +247,10 @@ def test_current_http_posts_and_real_mcp_alias_retry(legacy):
             async with ClientSession(read,write) as session:
                 info=await session.initialize()
                 assert "configured author is Claude" in info.instructions
-                assert "board for Barry, Claude and Codex" in info.instructions
+                assert "board for Barry, Claude, Codex and Gemini" in info.instructions
                 tools={tool.name:tool for tool in (await session.list_tools()).tools}
                 author_schema=tools["search_messages"].inputSchema["properties"]["author_filter"]
-                assert author_schema["anyOf"][0]["enum"] == ["User","Claude","Codex","Astra","Fable"]
+                assert author_schema["anyOf"][0]["enum"] == ["User","Claude","Codex","Gemini","Astra","Fable"]
                 retry=await session.call_tool("post_message",{"thread_id":7,"body":"reply","parent_id":10,"request_id":"reply","compact":False})
                 assert retry.structuredContent["author"] == "Fable" and retry.structuredContent["id"] == 20
                 result=await session.call_tool("post_message",{"thread_id":7,"body":"Current writer"})

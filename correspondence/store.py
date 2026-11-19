@@ -13,13 +13,14 @@ from pathlib import Path
 from uuid import uuid4
 
 USER = "User"
-AUTHORS = {USER, "Claude", "Codex"}
-PARTICIPANTS = (USER, "Claude", "Codex")
+AGENT_AUTHORS = ("Claude", "Codex", "Gemini")
+AUTHORS = {USER, *AGENT_AUTHORS}
+PARTICIPANTS = (USER, *AGENT_AUTHORS)
 LEGACY_AUTHORS = {"Claude": "Fable", "Codex": "Astra"}
 KINDS = {"note", "question", "proposal", "evidence", "decision", "counterexample"}
 DISPATCH_TARGETS = {"Claude", "Codex"}
 DISPATCH_GAP_SECONDS = 15
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 AUTO_HOPS = (1, 50)
 AUTO_CEILING = (10, 100)
 STALE_CLAIM_SECONDS = 120
@@ -36,14 +37,14 @@ class Conflict(ValueError):
 
 def author_name(author: str) -> str:
     if author not in AUTHORS:
-        raise ValueError("Author must be User, Claude, or Codex")
+        raise ValueError("Author must be User, Claude, Codex, or Gemini")
     return author
 
 
 def author_label(author: str, machine: str | None = None, user: str = USER) -> str:
     if author == USER:
         return user
-    return f"{author}@{machine}" if author in {"Claude", "Codex"} and machine else author
+    return f"{author}@{machine}" if author in AGENT_AUTHORS and machine else author
 
 
 def clean_text(value: str, label: str, maximum: int) -> str:
@@ -198,6 +199,11 @@ class Store:
                 con.execute("PRAGMA user_version=12")
             if version < 13:
                 con.execute("ALTER TABLE messages ADD COLUMN machine TEXT")
+                con.execute("PRAGMA user_version=13")
+            if version < 14:
+                cls._upgrade_gemini(con)
+                if con.execute("PRAGMA foreign_key_check").fetchall():
+                    raise sqlite3.IntegrityError("Foreign key violation while adding Gemini")
                 con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             con.commit()
         except Exception:
@@ -354,6 +360,37 @@ class Store:
             BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
 
     @staticmethod
+    def _upgrade_gemini(con):
+        """Admit Gemini as an author and participant. SQLite cannot alter a CHECK, so rebuild both tables."""
+        counts = [con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("messages", "read_markers")]
+        con.execute("""CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id),
+            author TEXT NOT NULL CHECK(author IN ('User','Claude','Codex','Gemini','Astra','Fable')),
+            model TEXT, body TEXT NOT NULL, kind TEXT NOT NULL,
+            parent_id INTEGER REFERENCES messages(id), created_at TEXT NOT NULL, machine TEXT)""")
+        con.execute("""INSERT INTO messages_new(id,thread_id,author,model,body,kind,parent_id,created_at,machine)
+            SELECT id,thread_id,author,model,body,kind,parent_id,created_at,machine FROM messages""")
+        con.execute("""CREATE TABLE read_markers_new (
+            author TEXT NOT NULL CHECK(author IN ('User','Claude','Codex','Gemini')),
+            thread_id INTEGER NOT NULL REFERENCES threads(id),
+            message_id INTEGER NOT NULL REFERENCES messages(id), PRIMARY KEY(author,thread_id))""")
+        con.execute("INSERT INTO read_markers_new(author,thread_id,message_id) SELECT author,thread_id,message_id FROM read_markers")
+        if counts != [con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("messages_new", "read_markers_new")]:
+            raise sqlite3.IntegrityError("Adding Gemini would lose a message or read marker")
+        con.execute("DROP TABLE read_markers")
+        con.execute("DROP TABLE messages")
+        con.execute("ALTER TABLE messages_new RENAME TO messages")
+        con.execute("ALTER TABLE read_markers_new RENAME TO read_markers")
+        con.execute("CREATE INDEX messages_thread ON messages(thread_id,id)")
+        con.execute("""CREATE TRIGGER messages_current_author BEFORE INSERT ON messages
+            WHEN NEW.author NOT IN ('User','Claude','Codex','Gemini')
+            BEGIN SELECT RAISE(ABORT, 'Use a current participant identity'); END""")
+        con.execute("""CREATE TRIGGER messages_no_update BEFORE UPDATE ON messages
+            BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
+        con.execute("""CREATE TRIGGER messages_no_delete BEFORE DELETE ON messages
+            BEGIN SELECT RAISE(ABORT, 'Messages are append-only'); END""")
+
+    @staticmethod
     def _user_name(con):
         row = con.execute("SELECT value FROM settings WHERE key='user_name'").fetchone()
         return row[0] if row else USER
@@ -429,7 +466,7 @@ class Store:
             if parent["thread_id"] != thread_id:
                 raise ValueError("Reply parent must belong to the same discussion")
         timestamp = now()
-        machine = self.machine if author in {"Claude", "Codex"} else None
+        machine = self.machine if author in AGENT_AUTHORS else None
         cursor = con.execute("INSERT INTO messages(thread_id,author,model,body,kind,parent_id,created_at,machine) VALUES (?,?,?,?,?,?,?,?)", (thread_id, author, model, body, kind, parent_id, timestamp, machine))
         con.execute("UPDATE threads SET updated_at=? WHERE id=?", (timestamp, thread_id))
         return cursor.lastrowid
@@ -451,7 +488,7 @@ class Store:
                                       first_unread_message_id=None, last_author=None,
                                       last_machine=None, last_author_label=None) for thread in threads}
         placeholders = ",".join("?" for _ in records)
-        stats = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'))
+        stats = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'),('Gemini','Gemini'))
             SELECT m.thread_id, p.author participant, COALESCE(r.message_id,0) marker,
                 COUNT(*) message_count, MIN(m.id) first_message_id, MAX(m.id) last_message_id,
                 SUM(m.id>COALESCE(r.message_id,0) AND m.author NOT IN (p.author,p.legacy)) unread_count,
@@ -1002,7 +1039,7 @@ class Store:
                 return []
             by_id = {project["id"]: project for project in projects}
             placeholders = ",".join("?" for _ in projects)
-            counts = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'))
+            counts = con.execute(f"""WITH participants(author,legacy) AS (VALUES ('User','User'),('Claude','Fable'),('Codex','Astra'),('Gemini','Gemini'))
                 SELECT t.project_id,p.author participant,COUNT(*) unread_count
                 FROM messages m JOIN threads t ON t.id=m.thread_id CROSS JOIN participants p
                 LEFT JOIN read_markers r ON r.thread_id=t.id AND r.author=p.author

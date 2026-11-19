@@ -76,7 +76,7 @@ def test_visit_clears_only_human_activity_and_never_decisions(board):
     store.post_message('Claude', thread, 'New finding')
     add_turn(store, a, 'Claude', 1, 'Choose.\nNext: User — decision needed: Red or blue?')
     before = store.read_thread('User', thread)['thread']['read_markers']
-    assert before == {'User': 0, 'Claude': 0, 'Codex': 0}
+    assert before == {'User': 0, 'Claude': 0, 'Codex': 0, 'Gemini': 0}
     assert project(client)['unread_count'] == 2
     with store.connect() as con:
         assert not con.execute("SELECT 1 FROM settings WHERE key LIKE 'human.%'").fetchall()

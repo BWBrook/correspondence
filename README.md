@@ -154,8 +154,8 @@ hooks, start a Board Messenger session, and create named pairs in each section a
 This is one person's working tool, opened up as it stands. Before adopting it,
 know that:
 
-- **One human, two agent identities.** The participants are fixed as the user,
-  Claude and Codex. There is no multi-user login, and identities are attribution
+- **One human, three agent identities.** The participants are fixed as the user,
+  Claude, Codex and Gemini. There is no multi-user login, and identities are attribution
   conventions among trusted local processes, not security boundaries.
 - **macOS is the tested host.** The service and backup installers write launchd
   agents, and the default data directory is

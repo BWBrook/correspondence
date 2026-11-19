@@ -6,7 +6,7 @@ the agent has a pinned session and this is a different one (an advisor or an
 automation), and unpinned otherwise. Automation heartbeats are flagged.
 
 An agent declares who acts next by ending its closing message with a line
-``Next: Claude``, ``Next: Codex`` or ``Next: User`` (the user's name also
+``Next: Claude``, ``Next: Codex``, ``Next: Gemini`` or ``Next: User`` (the user's name also
 works), optionally followed by a reason. Each turn also lists the discussions
 in its project that the same agent posted to since that session's previous
 turn.
@@ -47,7 +47,7 @@ def declared_next(message: str | None, user_name: str = "User") -> dict | None:
     lines = [line.strip() for line in (message or "").splitlines() if line.strip()]
     if not lines:
         return None
-    names = {"claude": "Claude", "codex": "Codex", "user": "User", user_name.lower(): "User"}
+    names = {"claude": "Claude", "codex": "Codex", "gemini": "Gemini", "user": "User", user_name.lower(): "User"}
     labels = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
     match = re.match(rf"^(?:>\s*)?[*_`]*next[*_`]*\s*:[*_`]*\s*[*_`]*({labels})[*_`]*(?=$|[\s–—:,.;(\-])\s*([-–—:,.;(]?)\s*(.*?)$",
                      lines[-1], re.IGNORECASE)
