@@ -123,9 +123,17 @@ def offsite(directory: Path, snapshot_path: Path, stamp: str) -> list[str]:
             folder = shlex.quote(folder)
             prepare = (f"mkdir -p {folder} && chmod 700 {folder} && find {folder} -maxdepth 1 -type f "
                        f"\\( -name 'board-*.sqlite3.gz' -o -name 'turns-*.jsonl.gz' \\) -mtime +{RETAIN_DAYS} -delete")
-            shell = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", host, prepare] if host else ["sh", "-c", prepare]
-            for command in (shell, ["rsync", "-t", *map(str, staged), destination.rstrip("/") + "/"]):
-                result = subprocess.run(command, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+            # Keepalives make a stalled link fail within a minute instead of holding the job.
+            ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+                   "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+            shell = [*ssh, host, prepare] if host else ["sh", "-c", prepare]
+            copy = ["rsync", "-t", "-e", shlex.join(ssh), *map(str, staged), destination.rstrip("/") + "/"]
+            for command in (shell, copy):
+                try:
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+                except subprocess.TimeoutExpired:
+                    failures.append(f"{destination}: {command[0]} gave no result within 600 seconds")
+                    break
                 if result.returncode != 0:
                     failures.append(f"{destination}: {(result.stderr or result.stdout).strip()[-300:]}")
                     break
