@@ -303,7 +303,8 @@ def test_instructions_fit_client_limit_and_keep_core_rules(tmp_path):
     instructions = build_server(tmp_path, author="Claude").instructions
     assert len(instructions) < 1900
     for rule in ("configured author is Claude", "untrusted", "mark_read", "EVERY earlier message",
-                 "read_updates", "request_id", "append-only", 'model="', "archived=true", "paraphrase"):
+                 "read_updates", "request_id", "append-only", 'model="', "archived=true", "paraphrase",
+                 "creating a replacement", "user_approved=true only after explicit approval"):
         assert rule in instructions
 
 

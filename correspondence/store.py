@@ -25,6 +25,7 @@ AUTO_HOPS = (1, 50)
 AUTO_CEILING = (10, 100)
 STALE_CLAIM_SECONDS = 120
 MACHINE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+ARCHIVED_WRITE = "This section was archived. Ask the board owner in chat before restoring it or creating a replacement."
 
 
 class NotFound(ValueError):
@@ -546,6 +547,30 @@ class Store:
         return project
 
     @staticmethod
+    def _has_archive_for(con, project_id):
+        return con.execute(
+            "SELECT 1 FROM projects WHERE archived_original_id=? AND archived_at IS NOT NULL LIMIT 1",
+            (project_id,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _writable_project(con, project_id):
+        try:
+            project = Store._require(con, "projects", project_id)
+        except NotFound:
+            if Store._has_archive_for(con, project_id):
+                raise NotFound(ARCHIVED_WRITE) from None
+            raise
+        if project["archived_at"] is not None:
+            raise NotFound(ARCHIVED_WRITE)
+
+    @staticmethod
+    def _writable_thread(con, thread_id):
+        thread = Store._require(con, "threads", thread_id)
+        Store._writable_project(con, thread["project_id"])
+        return thread
+
+    @staticmethod
     def _rekey_project(con, old_id, new_id):
         # Both references change atomically; deferred FK checking occurs at commit.
         con.execute("PRAGMA defer_foreign_keys=ON")
@@ -1008,7 +1033,7 @@ class Store:
             return [dict(row) for row in con.execute(
                 "SELECT * FROM dispatches WHERE pair_id=? ORDER BY id DESC LIMIT ?", (pair_id, limit))]
 
-    def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None):
+    def create_project(self, id: str, name: str, description: str = "", repo_path: str | None = None, *, allow_archive_reuse: bool = False):
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", id) or len(id) > 100:
             raise ValueError("Project id must be a lowercase hyphenated slug, up to 100 characters")
         name = clean_text(name, "name", 200)
@@ -1019,10 +1044,13 @@ class Store:
         with self.connect(write=True) as con:
             existing = con.execute("SELECT * FROM projects WHERE id=?", (id,)).fetchone()
             if existing:
-                self._project(con, id)
+                if existing["archived_at"] is not None:
+                    raise NotFound(ARCHIVED_WRITE)
                 if (existing["name"], existing["description"], existing["repo_path"]) != (name, description, repo_path):
                     raise Conflict("Project slug already exists with different details")
                 return dict(existing)
+            if not allow_archive_reuse and self._has_archive_for(con, id):
+                raise Conflict("A section with this ID was archived. Ask the board owner in chat before creating a replacement.")
             con.execute("INSERT INTO projects(id,name,description,repo_path,created_at,state_token) VALUES (?,?,?,?,?,?)", (id, name, description, repo_path, now(), uuid4().hex))
             con.execute("INSERT INTO pairs(project_id,name,state_token) VALUES (?,'Main',?)", (id, uuid4().hex))
             return self._require(con, "projects", id)
@@ -1076,8 +1104,9 @@ class Store:
         with self.connect(write=True) as con:
             result_id = self._request(con, author, request_id, "create_thread", payload)
             if result_id is not None:
-                return self._thread(con, result_id, author)
-            self._project(con, project_id)
+                thread = self._writable_thread(con, result_id)
+                return self._thread_records(con, [thread], author)[0]
+            self._writable_project(con, project_id)
             timestamp = now()
             result_id = con.execute("INSERT INTO threads(project_id,title,created_at,updated_at) VALUES (?,?,?,?)", (project_id,title,timestamp,timestamp)).lastrowid
             self._insert_message(con, result_id, author, model, body, kind)
@@ -1143,7 +1172,7 @@ class Store:
         body, model = self._message_args(author, body, kind, model)
         payload = [thread_id, body, kind, parent_id]
         with self.connect(write=True) as con:
-            self._visible_thread(con, thread_id)
+            self._writable_thread(con, thread_id)
             result_id = self._request(con, author, request_id, "post_message", payload)
             if result_id is not None:
                 return self._message_record(self._require(con, "messages", result_id), self._user_name(con))
@@ -1203,7 +1232,7 @@ class Store:
     def mark_read(self, author, thread_id, message_id):
         author_name(author)
         with self.connect(write=True) as con:
-            self._visible_thread(con, thread_id)
+            self._writable_thread(con, thread_id)
             message = self._require(con, "messages", message_id)
             if message["thread_id"] != thread_id:
                 raise ValueError("Read marker must reference a message in this discussion")
@@ -1244,7 +1273,7 @@ class Store:
         if model is not None:
             model = clean_text(model, "model", 200)
         with self.connect(write=True) as con:
-            thread = self._visible_thread(con, thread_id)
+            thread = self._writable_thread(con, thread_id)
             if thread["status"] != status:
                 con.execute("UPDATE threads SET status=? WHERE id=?", (status,thread_id))
                 self._insert_message(con, thread_id, author, model, f"Discussion status changed from {thread['status']} to {status}.", "note")

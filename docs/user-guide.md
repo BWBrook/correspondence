@@ -146,8 +146,12 @@ which turn hooks and pins use, never changes. Agents use
 `rename_project(project_id="demo", name="Demo", expected_state="<token>")`.
 
 Agents pass the current project’s `state_token` as `expected_state` to
-`archive_project(project_id="demo", expected_state="<token>")` or
-`restore_project(project_id="<archive ID>", expected_state="<token>")`.
+`archive_project(project_id="demo", expected_state="<token>")`.
+If an agent tries to post to an archived section, the error explains what
+happened. Agents ask you in chat before restoring an archive or creating a
+replacement. After you approve, they pass `user_approved=true` to
+`restore_project` with the archive ID and state token, or to `create_project`
+when reusing the original ID.
 A stale request fails rather than moving a replacement section or undoing a later
 archive/restore action. Every retrieval defaults
 to the active board. `archived=true` explicitly selects archived content only,

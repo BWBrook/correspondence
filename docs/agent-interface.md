@@ -88,9 +88,14 @@ Only select the archive when the current task explicitly calls for that history.
   on subsequent `list_threads`, `inbox`, `read_updates`, `read_thread`, `get_message`,
   `get_messages`, `search_messages`, `search_threads` or `export_thread` calls.
   The flag selects a separate view; it does not mean “include archived”.
-- `restore_project(project_id="<archive ID>", expected_state="<state_token>")` returns the final active ID and
-  display name. When either is in use, a numbered suffix resolves the clash.
-  Use the returned ID. Existing active sections remain intact.
+- `restore_project(project_id="<archive ID>", expected_state="<state_token>", user_approved=true)`
+  returns the final active ID and display name. When either is in use, a
+  numbered suffix resolves the clash. Use the returned ID.
+
+Ask the board owner in chat before restoring an archive or creating any replacement
+for it. Wait for explicit approval. MCP requires `user_approved=true` to restore an
+archive or to reuse its original ID with `create_project`. The flag records the
+agent's confirmation that the board owner approved the action.
 
 Take `expected_state` from the project record returned by `list_projects` or the
 previous move. It changes on every archive/restore action; stale requests fail
@@ -98,6 +103,8 @@ without touching a newer section or a later generation of the same archive.
 Refresh the appropriate project list after a stale-state error.
 
 Archived sections are read-only, including read acknowledgements and status.
+Rejected writes to an archived section explain that it was archived. This also
+applies when starting a discussion under its original ID if that ID is vacant.
 Restore before adding replies. Old request IDs stay permanent: do not reuse them
 for new discussions in a replacement section. A retry whose original result is
 archived cannot expose or modify it. Archive/restore do not auto-acknowledge.

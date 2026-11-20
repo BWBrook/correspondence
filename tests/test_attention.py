@@ -226,7 +226,7 @@ def test_seen_generation_does_not_leak_into_replacement_section(board):
     assert project(client)['status']['kind'] == 'quiet'
     old = project(client)
     archived = store.archive_project('earth', old['state_token'])
-    store.create_project('earth', 'Earth replacement')
+    store.create_project('earth', 'Earth replacement', allow_archive_reuse=True)
     replacement = store.pairs('earth')[0]['id']
     store.set_pair_agent(replacement, 'Claude', f'claude-session-{a}')
     assert project(client)['status']['kind'] == 'activity'

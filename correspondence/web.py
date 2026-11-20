@@ -178,7 +178,7 @@ def create_app(data_dir=None, dist_dir=None):
 
     @app.post("/api/projects", status_code=201)
     def create_project(payload: ProjectCreate):
-        return store().create_project(**payload.model_dump())
+        return store().create_project(**payload.model_dump(), allow_archive_reuse=True)
 
     @app.post("/api/projects/{project_id}/archive")
     def archive_project(project_id: str, payload: ProjectState):

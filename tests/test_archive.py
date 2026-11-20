@@ -124,6 +124,7 @@ def test_archived_mutations_and_retries_fail_without_changing_state(board):
     before = records(board)
     writes = [lambda: board.create_project(archive["id"], "Old", "Description", "/tmp/example"),
               lambda: board.create_thread("User", archive["id"], "New", "Forbidden"),
+              lambda: board.create_thread("User", "old", "New", "Forbidden"),
               lambda: board.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation"),
               lambda: board.post_message("Claude", 1, "needle reply", parent_id=1, request_id="reply"),
               lambda: board.post_message("User", 1, "Forbidden"),
@@ -131,15 +132,15 @@ def test_archived_mutations_and_retries_fail_without_changing_state(board):
               lambda: board.set_thread_status("User", 1, "resolved"),
               lambda: board.set_thread_status("User", 1, "open")]
     for write in writes:
-        with pytest.raises(NotFound):
+        with pytest.raises(NotFound, match="section was archived"):
             write()
         assert records(board) == before
     assert board.mark_all_read("User") == {"threads_marked": 0, "messages_marked": 0}
     assert records(board) == before
     # Reusing the released slug does not make an archived retry accessible.
-    board.create_project("old", "Fresh")
-    with pytest.raises(NotFound):
-        writes[2]()
+    board.create_project("old", "Fresh", allow_archive_reuse=True)
+    with pytest.raises(NotFound, match="section was archived"):
+        board.create_thread("Codex", "old", "Review needle", "needle opening", request_id="creation")
     active = board.create_thread("Claude", "old", "New discussion", "new body")
     assert board.mark_all_read("User") == {"threads_marked": 1, "messages_marked": 1}
     archived_read = board.read_thread("User", 1, archived=True)
@@ -149,7 +150,7 @@ def test_archived_mutations_and_retries_fail_without_changing_state(board):
 
 def test_restore_collisions_and_repeated_cycles(board):
     first = board.archive_project("old", token(board, "old"))
-    board.create_project("old", "Old")
+    board.create_project("old", "Old", allow_archive_reuse=True)
     board.create_project("old-restored-2", "Old (restored 2)")
     before = records(board)
     restored = board.restore_project(first["id"], token(board, first["id"]))
@@ -174,7 +175,7 @@ def test_archive_collision_and_length_limits(tmp_path):
     board.create_project(slug[:89] + "-archived-2", "occupied archive candidate")
     archived = board.archive_project(slug, token(board, slug))
     assert len(archived["id"]) <= 100 and archived["id"].endswith("-archived-3")
-    board.create_project(slug, name.lower())
+    board.create_project(slug, name.lower(), allow_archive_reuse=True)
     restored = board.restore_project(archived["id"], token(board, archived["id"]))
     assert len(restored["id"]) <= 100 and restored["id"].endswith("-restored-2")
     assert len(restored["name"]) <= 200 and restored["name"].endswith(" (restored 2)")
@@ -250,11 +251,15 @@ def test_http_archive_contract_and_boundary(board):
         assert len(client.get("/api/threads?archived=true").json()) == 1
         assert client.get("/api/search?q=needle").json() == []
         assert len(client.get("/api/search?q=needle&archived=true").json()) == 3
+        rejected = client.post("/api/threads/1/messages", json={"body": "Late reply"}, headers=headers)
+        assert rejected.status_code == 404 and "section was archived" in rejected.json()["detail"]
         assert client.post("/api/threads/1/read", json={"message_id": 2}, headers=headers).status_code == 404
         assert client.post(f"/api/projects/{archived['id']}/restore", json={}, headers=headers).status_code == 422
         assert client.post(f"/api/projects/{archived['id']}/restore", json={"expected_state": "wrong"}, headers=headers).status_code == 409
+        replacement = client.post("/api/projects", json={"id": "old", "name": "Replacement"}, headers=headers)
+        assert replacement.status_code == 201 and replacement.json()["id"] == "old"
         restored = client.post(f"/api/projects/{archived['id']}/restore", json={"expected_state": archived["state_token"]}, headers=headers)
-        assert restored.status_code == 200 and restored.json()["id"] == "old"
+        assert restored.status_code == 200 and restored.json()["id"] == "old-restored-2"
 
 
 def test_real_mcp_archive_contract(board):
@@ -287,11 +292,34 @@ def test_real_mcp_archive_contract(board):
                 assert batch.structuredContent["missing_ids"] == [2]
                 batch = await session.call_tool("get_messages", {"message_ids": [2], "archived": True, "include_parents": True})
                 assert [m["id"] for m in batch.structuredContent["messages"]] == [2, 1]
-                assert (await session.call_tool("post_message", {"thread_id": 1, "body": "Forbidden"})).isError
-                assert (await session.call_tool("restore_project", {"project_id": archived["id"]})).isError
-                assert (await session.call_tool("restore_project", {"project_id": archived["id"], "expected_state": "wrong"})).isError
-                restored = await session.call_tool("restore_project", {"project_id": archived["id"], "expected_state": archived["state_token"]})
-                assert restored.structuredContent["id"] == "old"
+                before = records(board)
+                posting = {"thread_id": 1, "body": "Forbidden"}
+                opening = {"project_id": "old", "title": "New", "body": "Forbidden"}
+                replacement = {"id": "old", "name": "Replacement"}
+                restoration = {"project_id": archived["id"], "expected_state": archived["state_token"]}
+                for tool, args in (("post_message", posting), ("create_thread", opening),
+                                   ("create_project", replacement)):
+                    rejected = await session.call_tool(tool, args)
+                    assert rejected.isError and "was archived" in rejected.content[0].text
+                    assert "Ask the board owner" in rejected.content[0].text
+                missing = await session.call_tool("create_thread", opening | {"project_id": "missing"})
+                assert missing.isError and "not found" in missing.content[0].text
+                assert "was archived" not in missing.content[0].text
+                rejected = await session.call_tool("restore_project", restoration)
+                assert rejected.isError and "in chat before restoring" in rejected.content[0].text
+                for tool, args in (("create_project", replacement), ("restore_project", restoration)):
+                    assert (await session.call_tool(tool, args | {"user_approved": "true"})).isError
+                assert (await session.call_tool("restore_project", restoration | {
+                    "user_approved": True, "expected_state": "wrong"})).isError
+                assert records(board) == before
+
+                created = await session.call_tool("create_project", replacement | {"user_approved": True})
+                assert not created.isError and created.structuredContent["id"] == "old"
+                assert not (await session.call_tool("list_threads", {"project_id": "old"})).structuredContent["items"]
+                assert (await session.call_tool("post_message", posting)).isError
+                restored = await session.call_tool("restore_project", restoration | {"user_approved": True})
+                assert not restored.isError and restored.structuredContent["id"] == "old-restored-2"
+                assert not (await session.call_tool("post_message", posting | {"body": "Welcome back"})).isError
     asyncio.run(run())
 
 
@@ -299,7 +327,7 @@ def test_stale_actions_cannot_target_reused_slug_or_later_generation(board):
     original_token = token(board, "old")
     assert board.create_project("old", "Old", "Description", "/tmp/example")["state_token"] == original_token
     first_archive = board.archive_project("old", original_token)
-    replacement = board.create_project("old", "Replacement")
+    replacement = board.create_project("old", "Replacement", allow_archive_reuse=True)
     before = records(board)
     with pytest.raises(Conflict):
         board.archive_project("old", original_token)
